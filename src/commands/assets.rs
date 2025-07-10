@@ -149,3 +149,98 @@ pub fn process_images() {
 pub fn process_fonts() {
     println!("Processing fonts...");
 } 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use std::fs;
+
+    #[test]
+    fn test_collect_asset_files_from_project() {
+        // テスト用の一時ディレクトリを作成
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path();
+        
+        // アセットディレクトリを作成
+        let assets_dir = project_path.join("assets");
+        let images_dir = assets_dir.join("images");
+        fs::create_dir_all(&images_dir).unwrap();
+        
+        // テストファイルを作成
+        fs::write(images_dir.join("logo.png"), "fake image").unwrap();
+        fs::write(assets_dir.join("data.json"), "fake data").unwrap();
+        
+        let asset_paths = vec![
+            "assets/images/".to_string(),
+            "assets/data.json".to_string(),
+        ];
+        
+        let asset_files = collect_asset_files_from_project(&asset_paths, project_path.to_str().unwrap());
+        
+        assert_eq!(asset_files.len(), 2);
+        assert!(asset_files.contains(&"assets/images/logo.png".to_string()));
+        assert!(asset_files.contains(&"assets/data.json".to_string()));
+    }
+
+    #[test]
+    fn test_generate_dart_assets_class() {
+        let asset_files = vec![
+            "assets/images/logo.png".to_string(),
+            "assets/data/sample.json".to_string(),
+        ];
+        
+        let dart_code = generate_dart_assets_class(&asset_files);
+        
+        assert!(dart_code.contains("class Assets"));
+        assert!(dart_code.contains("AssetsImagesLogopng"));
+        assert!(dart_code.contains("assets/images/logo.png"));
+        assert!(dart_code.contains("AssetsDataSamplejson"));
+        assert!(dart_code.contains("assets/data/sample.json"));
+    }
+
+    #[test]
+    fn test_asset_file_to_constant_name() {
+        let test_cases = vec![
+            ("assets/images/logo.png", "AssetsImagesLogopng"),
+            ("assets/data/sample.json", "AssetsDataSamplejson"),
+            ("assets/fonts/Roboto-Regular.ttf", "AssetsFontsRobotoRegularttf"),
+        ];
+        
+        for (input, expected) in test_cases {
+            let result = asset_file_to_constant_name(input);
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_parse_pubspec_yaml() {
+        let yaml_content = r#"
+name: test_app
+flutter:
+  assets:
+    - assets/images/
+    - assets/data/sample.json
+"#;
+        
+        let pubspec: PubspecYaml = serde_yaml::from_str(yaml_content).unwrap();
+        
+        assert_eq!(pubspec.name, "test_app");
+        assert_eq!(pubspec.flutter.assets.len(), 2);
+        assert!(pubspec.flutter.assets.contains(&"assets/images/".to_string()));
+        assert!(pubspec.flutter.assets.contains(&"assets/data/sample.json".to_string()));
+    }
+
+    #[test]
+    fn test_parse_pubspec_yaml_without_assets() {
+        let yaml_content = r#"
+name: test_app
+flutter:
+"#;
+        
+        let pubspec: PubspecYaml = serde_yaml::from_str(yaml_content).unwrap();
+        
+        assert_eq!(pubspec.name, "test_app");
+        assert_eq!(pubspec.flutter.assets.len(), 0);
+    }
+} 

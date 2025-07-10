@@ -1,0 +1,31 @@
+use std::env;
+use std::path::PathBuf;
+
+fn main() {
+    // tree-sitter-dartのソースディレクトリ
+    let tree_sitter_dart_dir = PathBuf::from("tree-sitter-dart");
+    
+    // tree-sitter-dartディレクトリが存在しない場合は警告
+    if !tree_sitter_dart_dir.exists() {
+        println!("cargo:warning=tree-sitter-dart directory not found. Please run: git submodule update --init");
+        return;
+    }
+    
+    // tree-sitter-dartのパーサーをビルド
+    let parser_c = tree_sitter_dart_dir.join("src/parser.c");
+    let scanner_c = tree_sitter_dart_dir.join("src/scanner.c");
+    
+    if parser_c.exists() {
+        cc::Build::new()
+            .file(parser_c)
+            .file(scanner_c)
+            .include(&tree_sitter_dart_dir.join("src"))
+            .compile("tree-sitter-dart");
+        
+        println!("cargo:rerun-if-changed=tree-sitter-dart/src/parser.c");
+        println!("cargo:rerun-if-changed=tree-sitter-dart/src/scanner.c");
+        println!("cargo:rerun-if-changed=tree-sitter-dart/src/parser.h");
+    } else {
+        println!("cargo:warning=tree-sitter-dart parser.c not found");
+    }
+} 

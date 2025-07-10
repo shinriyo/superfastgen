@@ -11,6 +11,7 @@ walkdir = "2"
 tera = "1.19"       # テンプレートエンジン
 rayon = "1.7"       # 並列化用
 tree-sitter = "0.20"
+tempfile = "3.8"    # テスト用一時ファイル
 
 [build-dependencies]
 cc = "1" # tree-sitter-dart ビルド用（後ほど）

@@ -1,0 +1,3 @@
+[submodule "tree-sitter-dart"]
+	path = tree-sitter-dart
+	url = https://github.com/UserNobody14/tree-sitter-dart.git

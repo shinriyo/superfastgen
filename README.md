@@ -35,6 +35,9 @@ superfastgen/
 git clone https://github.com/shinriyo/superfastgen.git
 cd superfastgen
 
+# Initialize submodules (for tree-sitter-dart)
+git submodule update --init
+
 # Build the project
 cargo build
 
@@ -44,12 +47,68 @@ cargo run
 
 ## Usage
 
-```bash
-# Run the code generator
-cargo run
+### Basic Usage
 
-# Build for release
-cargo build --release
+```bash
+# Run the code generator (generates all types)
+cargo run
+```
+
+### What it does
+
+1. **Asset Generation**:
+
+   - Reads `test_flutter_app/pubspec.yaml`
+   - Scans assets directories recursively
+   - Generates `test_flutter_app/lib/gen/assets.gen.dart`
+
+2. **Code Generation**:
+   - Scans `test_flutter_app/lib/` for Dart files
+   - Detects annotations: `@freezed`, `@JsonSerializable`, `@riverpod`
+   - Generates corresponding `.g.dart` files
+
+### Example Output
+
+After running `cargo run`, you'll get:
+
+```
+Generating Freezed code...
+Generated: test_flutter_app/lib/user.g.dart
+Generated 1 .g.dart files for freezed
+
+Generating JSON code...
+Generated: test_flutter_app/lib/product.g.dart
+Generated 1 .g.dart files for json
+
+Generating Riverpod code...
+Generated: test_flutter_app/lib/provider.g.dart
+Generated 2 .g.dart files for riverpod
+
+Generating assets from test_flutter_app
+Generated assets.gen.dart with 6 asset constants
+```
+
+### Generated Files
+
+- `test_flutter_app/lib/user.g.dart` - Freezed code generation
+- `test_flutter_app/lib/product.g.dart` - JSON serialization
+- `test_flutter_app/lib/provider.g.dart` - Riverpod providers
+- `test_flutter_app/lib/gen/assets.gen.dart` - Asset constants
+
+### Custom Project Path
+
+To use with your own Flutter project:
+
+```rust
+// In your Rust code
+use superfastgen::commands::assets;
+use superfastgen::commands::generate;
+
+// Generate assets for your project
+assets::generate_assets_from_path("your_flutter_project");
+
+// Generate code for your project
+generate::generate_freezed(); // Uses "test_flutter_app/lib" by default
 ```
 
 ## Development
@@ -94,12 +153,14 @@ MIT License
 
 ## Roadmap
 
-- [ ] CLI interface with subcommands
-- [ ] Freezed code generation
-- [ ] JSON serialization
-- [ ] Riverpod provider generation
-- [ ] Asset processing
-- [ ] Tree-sitter integration
-- [ ] YAML configuration
+- [x] CLI interface with subcommands
+- [x] Freezed code generation
+- [x] JSON serialization
+- [x] Riverpod provider generation
+- [x] Asset processing
+- [x] Tree-sitter integration
+- [x] YAML configuration
 - [ ] Template system
 - [ ] Plugin architecture
+- [ ] CLI arguments for custom paths
+- [ ] Watch mode for automatic regeneration
