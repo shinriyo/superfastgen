@@ -1,6 +1,16 @@
 [package]
 name = "superfastgen"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+walkdir = "2"
+tera = "1.19"       # テンプレートエンジン
+rayon = "1.7"       # 並列化用
+tree-sitter = "0.20"
+
+[build-dependencies]
+cc = "1" # tree-sitter-dart ビルド用（後ほど）
