@@ -52,6 +52,9 @@ cargo run
 ```bash
 # Run the code generator (generates all types)
 cargo run
+
+# Run in watch mode (automatically regenerates on file changes)
+cargo run -- --watch
 ```
 
 ### What it does
@@ -63,9 +66,15 @@ cargo run
    - Generates `test_flutter_app/lib/gen/assets.gen.dart`
 
 2. **Code Generation**:
+
    - Scans `test_flutter_app/lib/` for Dart files
    - Detects annotations: `@freezed`, `@JsonSerializable`, `@riverpod`
    - Generates corresponding `.g.dart` files
+
+3. **Watch Mode**:
+   - Monitors `test_flutter_app/lib/` and `pubspec.yaml` for changes
+   - Automatically regenerates code when files are modified
+   - Similar to `flutter pub run build_runner watch`
 
 ### Example Output
 

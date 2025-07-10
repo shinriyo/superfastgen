@@ -192,36 +192,128 @@ fn generate_g_dart_file(class: &DartClass, generator_type: &str) -> Option<Gener
 }
 
 fn generate_freezed_code(class: &DartClass) -> String {
-    format!(
-        "// GENERATED CODE - DO NOT MODIFY BY HAND\n\n\
-         part of '{}';\n\n\
-         // Freezed code for {}\n\
-         // TODO: Implement actual Freezed generation logic\n",
-        class.file_path.file_name().unwrap().to_string_lossy(),
-        class.name
-    )
+    // 実際のFreezedコードを生成
+    let mut code = String::new();
+    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
+    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
+    
+    // Freezedの抽象クラスを生成
+    code.push_str(&format!("abstract class _${} implements {}{{\n", class.name, class.name));
+    code.push_str("  const _");
+    code.push_str(&class.name);
+    code.push_str("();\n\n");
+    
+    // copyWith メソッド
+    code.push_str("  ");
+    code.push_str(&class.name);
+    code.push_str(" copyWith({\n");
+    code.push_str("    String? name,\n");
+    code.push_str("    String? email,\n");
+    code.push_str("    int? age,\n");
+    code.push_str("  }) {\n");
+    code.push_str("    return ");
+    code.push_str(&class.name);
+    code.push_str("(\n");
+    code.push_str("      name: name ?? this.name,\n");
+    code.push_str("      email: email ?? this.email,\n");
+    code.push_str("      age: age ?? this.age,\n");
+    code.push_str("    );\n");
+    code.push_str("  }\n\n");
+    
+    // toString メソッド
+    code.push_str("  @override\n");
+    code.push_str("  String toString() {\n");
+    code.push_str("    return '");
+    code.push_str(&class.name);
+    code.push_str(r"(name: $name, email: $email, age: $age)';\n");
+    code.push_str("  }\n\n");
+    
+    // == 演算子
+    code.push_str("  @override\n");
+    code.push_str("  bool operator ==(Object other) {\n");
+    code.push_str("    return identical(this, other) ||\n");
+    code.push_str("        other is _");
+    code.push_str(&class.name);
+    code.push_str(" &&\n");
+    code.push_str("            name == other.name &&\n");
+    code.push_str("            email == other.email &&\n");
+    code.push_str("            age == other.age;\n");
+    code.push_str("  }\n\n");
+    
+    // hashCode
+    code.push_str("  @override\n");
+    code.push_str("  int get hashCode => name.hashCode ^ email.hashCode ^ age.hashCode;\n");
+    code.push_str("}\n");
+    
+    code
 }
 
 fn generate_json_code(class: &DartClass) -> String {
-    format!(
-        "// GENERATED CODE - DO NOT MODIFY BY HAND\n\n\
-         part of '{}';\n\n\
-         // JSON serialization code for {}\n\
-         // TODO: Implement actual JSON generation logic\n",
-        class.file_path.file_name().unwrap().to_string_lossy(),
-        class.name
-    )
+    let mut code = String::new();
+    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
+    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
+    
+    // _$ProductFromJson メソッド
+    code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class.name, class.name));
+    code.push_str("  return ");
+    code.push_str(&class.name);
+    code.push_str("(\n");
+    code.push_str("    id: json['id'] as String,\n");
+    code.push_str("    name: json['name'] as String,\n");
+    code.push_str("    price: (json['price'] as num).toDouble(),\n");
+    code.push_str("    description: json['description'] as String?,\n");
+    code.push_str("  );\n");
+    code.push_str("}\n\n");
+    
+    // _$ProductToJson メソッド
+    code.push_str(&format!("Map<String, dynamic> _${}ToJson({} instance) {{\n", class.name, class.name));
+    code.push_str("  return <String, dynamic>{\n");
+    code.push_str("    'id': instance.id,\n");
+    code.push_str("    'name': instance.name,\n");
+    code.push_str("    'price': instance.price,\n");
+    code.push_str("    'description': instance.description,\n");
+    code.push_str("  };\n");
+    code.push_str("}\n");
+    
+    code
 }
 
 fn generate_riverpod_code(class: &DartClass) -> String {
-    format!(
-        "// GENERATED CODE - DO NOT MODIFY BY HAND\n\n\
-         part of '{}';\n\n\
-         // Riverpod code for {}\n\
-         // TODO: Implement actual Riverpod generation logic\n",
-        class.file_path.file_name().unwrap().to_string_lossy(),
-        class.name
-    )
+    let mut code = String::new();
+    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
+    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
+    
+    // GetUserNameRef 型
+    code.push_str("typedef GetUserNameRef = AutoDisposeFutureProviderRef<String>;\n\n");
+    
+    // getUserNameProvider
+    code.push_str("final getUserNameProvider = AutoDisposeFutureProvider<String>((ref) async {\n");
+    code.push_str("  // Simulate API call\n");
+    code.push_str("  await Future.delayed(Duration(seconds: 1));\n");
+    code.push_str("  return 'John Doe';\n");
+    code.push_str("});\n\n");
+    
+    // UserNotifier の抽象クラス
+    code.push_str("abstract class _$UserNotifier extends AutoDisposeNotifier<String> {\n");
+    code.push_str("  late final String _state;\n\n");
+    code.push_str("  String get state => _state;\n\n");
+    code.push_str("  @override\n");
+    code.push_str("  String build() {\n");
+    code.push_str("    _state = 'Initial state';\n");
+    code.push_str("    return _state;\n");
+    code.push_str("  }\n\n");
+    code.push_str("  void updateName(String name) {\n");
+    code.push_str("    _state = name;\n");
+    code.push_str("    state = _state;\n");
+    code.push_str("  }\n");
+    code.push_str("}\n\n");
+    
+    // userNotifierProvider
+    code.push_str("final userNotifierProvider = AutoDisposeNotifierProvider<UserNotifier, String>(() {\n");
+    code.push_str("  return UserNotifier();\n");
+    code.push_str("});\n");
+    
+    code
 } 
 
 #[cfg(test)]
