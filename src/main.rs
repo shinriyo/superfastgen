@@ -6,9 +6,10 @@ mod utils;
 use commands::{generate, assets};
 use utils::{parser, yaml};
 
-use notify::{Watcher, RecursiveMode, RecommendedWatcher, Event, EventKind};
+use notify::{Watcher, RecursiveMode, RecommendedWatcher, Event, EventKind, Config};
 use std::sync::mpsc::channel;
 use std::time::Duration;
+use std::path::Path;
 
 #[derive(Parser)]
 #[command(name = "SuperFastGen")]
@@ -47,21 +48,23 @@ fn run_generators() {
 fn watch_mode() {
     println!("Watching for changes in test_flutter_app/lib and pubspec.yaml...");
     let (tx, rx) = channel();
-    let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(1)).unwrap();
-    watcher.watch("test_flutter_app/lib", RecursiveMode::Recursive).unwrap();
-    watcher.watch("test_flutter_app/pubspec.yaml", RecursiveMode::NonRecursive).unwrap();
+    let config = Config::default().with_poll_interval(Duration::from_secs(1));
+    let mut watcher: RecommendedWatcher = Watcher::new(tx, config).unwrap();
+    watcher.watch(Path::new("test_flutter_app/lib"), RecursiveMode::Recursive).unwrap();
+    watcher.watch(Path::new("test_flutter_app/pubspec.yaml"), RecursiveMode::NonRecursive).unwrap();
 
     run_generators();
 
     loop {
         match rx.recv() {
-            Ok(event) => {
+            Ok(Ok(event)) => {
                 if let Event { kind: EventKind::Modify(_), .. } | Event { kind: EventKind::Create(_), .. } | Event { kind: EventKind::Remove(_), .. } = event {
                     println!("Change detected! Regenerating...");
                     run_generators();
                 }
             }
-            Err(e) => println!("watch error: {:?}", e),
+            Ok(Err(e)) => println!("watch error: {:?}", e),
+            Err(e) => println!("channel error: {:?}", e),
         }
     }
 }
