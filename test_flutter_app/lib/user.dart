@@ -4,7 +4,8 @@ part 'user.freezed.dart';
 part 'user.g.dart';
 
 @freezed
-class User with _$User {
+@JsonSerializable()
+abstract class User with _$User {
   const factory User({
     required String name,
     required String email,

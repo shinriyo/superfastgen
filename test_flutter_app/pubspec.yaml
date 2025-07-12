@@ -28,3 +28,6 @@ flutter:
     - assets/icons/
     - assets/fonts/
     - assets/data/sample.json
+    - lib/
+    - lib/gen/
+    - lib/generated/

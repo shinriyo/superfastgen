@@ -70,7 +70,20 @@ pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
 
 #[allow(dead_code)]
 fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
-    generate_code_for_annotation_with_paths(annotation, generator_type, "test_flutter_app/lib", "test_flutter_app/lib/gen")
+    // Flutterプロジェクトのルートを自動検出
+    if let Some(project_root) = find_flutter_project_root() {
+        let lib_path = project_root.join("lib");
+        let lib_path_str = lib_path.to_string_lossy();
+        
+        info!("Using Flutter project: {}", project_root.display());
+        info!("Lib directory: {}", lib_path_str);
+        
+        // 出力先はlibディレクトリと同じ場所（.g.dartファイルは元のファイルと同じディレクトリに）
+        generate_code_for_annotation_with_paths(annotation, generator_type, &lib_path_str, &lib_path_str)
+    } else {
+        error!("No Flutter project found. Make sure you're in a directory with pubspec.yaml and lib/");
+        std::process::exit(1);
+    }
 }
 
 fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &str, input_path: &str, output_path: &str) {
@@ -91,7 +104,15 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
     // 指定されたアノテーションを持つクラスをフィルタ（重複を除去）
     let mut target_classes: Vec<DartClass> = classes
         .into_iter()
-        .filter(|class| class.annotations.iter().any(|ann| ann.contains(annotation)))
+        .filter(|class| {
+            let has_ann = class.annotations.iter().any(|ann| ann.contains(annotation));
+            if has_ann {
+                debug!("Class {} in {} has annotation {}", class.name, class.file_path.display(), annotation);
+            } else {
+                debug!("Class {} in {} does NOT have annotation {} (found: {:?})", class.name, class.file_path.display(), annotation, class.annotations);
+            }
+            has_ann
+        })
         .collect();
     
     // 重複を除去（同じクラス名とファイルパスの組み合わせ）
@@ -124,6 +145,28 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
     }
     
     info!("Generated {} .g.dart files for {}", results_count, generator_type);
+}
+
+fn find_flutter_project_root() -> Option<PathBuf> {
+    let mut current_dir = std::env::current_dir().ok()?;
+    
+    // 上位ディレクトリを探索してpubspec.yamlを探す
+    loop {
+        let pubspec_path = current_dir.join("pubspec.yaml");
+        let lib_path = current_dir.join("lib");
+        
+        if pubspec_path.exists() && lib_path.exists() {
+            debug!("Found Flutter project root: {}", current_dir.display());
+            return Some(current_dir);
+        }
+        
+        // 親ディレクトリに移動
+        if !current_dir.pop() {
+            break;
+        }
+    }
+    
+    None
 }
 
 fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
@@ -159,25 +202,32 @@ fn parse_dart_file(file_path: &Path) -> Option<Vec<DartClass>> {
 fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>> {
     let mut classes = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
+    let mut pending_annotations: Vec<String> = Vec::new();
     
-    for (i, line) in lines.iter().enumerate() {
+    for line in lines.iter() {
         let trimmed = line.trim();
-        
-        // アノテーション行を検出
         if trimmed.starts_with('@') {
-            let annotations = extract_annotations(&lines, i);
-            
-            // 次の行でクラス定義を探す
-            if let Some(class_name) = find_class_definition(&lines, i + 1) {
+            pending_annotations.push(trimmed.to_string());
+        } else if trimmed.starts_with("class ") || trimmed.starts_with("abstract class ") {
+            // "class ClassName" or "abstract class ClassName" からクラス名を抽出
+            let class_name = if trimmed.starts_with("abstract class ") {
+                trimmed.split_whitespace().nth(2)
+            } else {
+                trimmed.split_whitespace().nth(1)
+            };
+            if let Some(class_name) = class_name {
                 classes.push(DartClass {
-                    name: class_name,
-                    annotations,
+                    name: class_name.to_string(),
+                    annotations: pending_annotations.clone(),
                     file_path: file_path.to_path_buf(),
                 });
             }
+            pending_annotations.clear();
+        } else if !trimmed.is_empty() && !trimmed.starts_with("//") {
+            // Any non-empty, non-comment, non-annotation, non-class line clears pending annotations
+            pending_annotations.clear();
         }
     }
-    
     Some(classes)
 }
 
@@ -235,10 +285,14 @@ fn generate_g_dart_file(class: &DartClass, generator_type: &str) -> Option<Gener
     })
 }
 
-fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, output_path: &str) -> Option<GenerationResult> {
+fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, _output_path: &str) -> Option<GenerationResult> {
     let input_file = &class.file_path;
-    let output_file = PathBuf::from(output_path).join(input_file.file_name().unwrap());
-    let output_file = output_file.with_extension("g.dart");
+    
+    // Set output path based on generator type
+    let output_file = match generator_type {
+        "freezed" => input_file.with_extension("freezed.dart"),
+        _ => input_file.with_extension("g.dart"),
+    };
     
     let generated_code = match generator_type {
         "freezed" => generate_freezed_code(class),
@@ -257,43 +311,84 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
 fn generate_freezed_code(class: &DartClass) -> String {
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
-    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_stem().unwrap().to_str().unwrap()));
+    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     
-    // クラス名を取得
+    // Get class name
     let class_name = &class.name;
     
-    // ソースファイルからフィールドを抽出
+    // Extract fields from source file
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
     let fields = extract_fields_from_dart_class(&source_content);
     
-    // 抽象クラス定義
-    code.push_str(&format!("abstract class _${} implements {} {{\n", class_name, class_name));
+    // --- mixin ---
+    code.push_str(&format!("mixin _${} {{\n", class_name));
+    // copyWith signature only (no implementation)
+    code.push_str(&format!("  {} copyWith({{", class_name));
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 { code.push_str(", "); }
+        // Handle nullable types correctly
+        let param_type = if field.ty.ends_with('?') {
+            field.ty.clone()
+        } else {
+            format!("{}?", field.ty)
+        };
+        code.push_str(&format!("{} {}", param_type, field.name));
+    }
+    code.push_str("});\n");
+    code.push_str("}\n\n");
     
-    // copyWithメソッド
-    code.push_str(&generate_copy_with(class_name, &fields));
+    // --- class ---
+    code.push_str(&format!("class _{} with _${} implements {} {{\n", class_name, class_name, class_name));
+    // Field declarations
+    for field in &fields {
+        code.push_str(&format!("  final {} {};\n", field.ty, field.name));
+    }
     code.push_str("\n");
-    
-    // toStringメソッド
+    // const constructor
+    code.push_str(&format!("  const _{}({{", class_name));
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 { code.push_str(", "); }
+        // Only add required for non-nullable fields
+        if field.ty.ends_with('?') {
+            code.push_str(&format!("this.{}", field.name));
+        } else {
+            code.push_str(&format!("required this.{}", field.name));
+        }
+    }
+    code.push_str("});\n\n");
+    // copyWith implementation
+    code.push_str(&format!("  @override\n  {} copyWith({{", class_name));
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 { code.push_str(", "); }
+        // Handle nullable types correctly
+        let param_type = if field.ty.ends_with('?') {
+            field.ty.clone()
+        } else {
+            format!("{}?", field.ty)
+        };
+        code.push_str(&format!("{} {}", param_type, field.name));
+    }
+    code.push_str(&format!("}}) {{\n    return _{}(", class_name));
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 { code.push_str(", "); }
+        code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
+    }
+    code.push_str(");\n  }\n\n");
+    // toString method
     code.push_str(&generate_to_string(class_name, &fields));
     code.push_str("\n");
-    
-    // ==演算子
+    // == operator
     code.push_str(&generate_eq(class_name, &fields));
     code.push_str("\n");
-    
     // hashCode
     code.push_str(&generate_hash_code(&fields));
     code.push_str("\n");
-    
-    // fromJsonファクトリメソッド
-    code.push_str(&generate_from_json(class_name, &fields));
-    code.push_str("\n");
-    
-    // toJsonメソッド
+    // toJson method
     code.push_str(&generate_to_json(class_name, &fields));
     code.push_str("\n");
+    code.push_str("}\n\n");
     
-    code.push_str("}\n");
+    // Note: JSON functions are generated in user.g.dart, not here
     
     code
 }
@@ -302,19 +397,25 @@ fn generate_copy_with(class_name: &str, fields: &[DartField]) -> String {
     let mut code = String::new();
     code.push_str(&format!("  {} copyWith({{\n", class_name));
     
-    // オプショナルパラメータを生成
+    // Generate optional parameters
     for field in fields {
-        code.push_str(&format!("    {}? {},\n", field.ty, field.name));
+        // Remove duplicate ? from nullable types
+        let param_type = if field.ty.ends_with('?') {
+            field.ty.clone()
+        } else {
+            format!("{}?", field.ty)
+        };
+        code.push_str(&format!("    {} {},\n", param_type, field.name));
     }
     code.push_str("  }) {\n");
-    code.push_str(&format!("    return {}(\n", class_name));
+    code.push_str(&format!("    return _{}(", class_name));
     
-    // フィールドの割り当てを生成
+    // Generate field assignments
     for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(",\n"); }
-        code.push_str(&format!("      {}: {} ?? this.{}", field.name, field.name, field.name));
+        if i > 0 { code.push_str(", "); }
+        code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
     }
-    code.push_str("\n    );\n");
+    code.push_str(");\n");
     code.push_str("  }\n");
     
     code
@@ -326,7 +427,7 @@ fn generate_to_string(class_name: &str, fields: &[DartField]) -> String {
     code.push_str(&format!("  String toString() {{\n"));
     code.push_str(&format!("    return '{}(", class_name));
     
-    // フィールドの文字列表現を生成
+    // Generate string representation of fields
     for (i, field) in fields.iter().enumerate() {
         if i > 0 { code.push_str(", "); }
         code.push_str(&format!("{}: ${}", field.name, field.name));
@@ -344,7 +445,7 @@ fn generate_eq(class_name: &str, fields: &[DartField]) -> String {
     code.push_str(&format!("    return identical(this, other) ||\n"));
     code.push_str(&format!("        other is _{} &&\n", class_name));
     
-    // フィールドの比較を生成
+    // Generate field comparisons
     for (i, field) in fields.iter().enumerate() {
         if i > 0 { code.push_str(" &&\n"); }
         code.push_str(&format!("        {} == other.{}", field.name, field.name));
@@ -360,7 +461,7 @@ fn generate_hash_code(fields: &[DartField]) -> String {
     code.push_str("  @override\n");
     code.push_str("  int get hashCode => ");
     
-    // フィールドのハッシュコードを生成
+    // Generate hashCode for fields
     for (i, field) in fields.iter().enumerate() {
         if i > 0 { code.push_str(" ^ "); }
         code.push_str(&format!("{}.hashCode", field.name));
@@ -377,7 +478,7 @@ fn generate_hash_code(fields: &[DartField]) -> String {
 fn generate_json_code(class: &DartClass) -> String {
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
-    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_stem().unwrap().to_str().unwrap()));
+    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     
     let class_name = &class.name;
     
@@ -385,16 +486,21 @@ fn generate_json_code(class: &DartClass) -> String {
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
     let fields = extract_fields_from_dart_class(&source_content);
     
+    debug!("Extracted {} fields for class {}", fields.len(), class_name);
+    for field in &fields {
+        debug!("Field: {} {}", field.ty, field.name);
+    }
+    
     // _$ClassNameFromJson関数
     code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class_name, class_name));
-    code.push_str(&format!("  return {}(\n", class_name));
+    code.push_str(&format!("  return _{}(", class_name));
     
     // フィールドのJSON解析を生成
     for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(",\n"); }
-        code.push_str(&format!("    {}: json['{}'] as {}", field.name, field.name, field.ty));
+        if i > 0 { code.push_str(", "); }
+        code.push_str(&format!("{}: json['{}'] as {}", field.name, field.name, field.ty));
     }
-    code.push_str("\n  );\n");
+    code.push_str(");\n");
     code.push_str("}\n\n");
     
     // _$ClassNameToJson関数
@@ -404,7 +510,7 @@ fn generate_json_code(class: &DartClass) -> String {
     // フィールドのJSON変換を生成
     for (i, field) in fields.iter().enumerate() {
         if i > 0 { code.push_str(",\n"); }
-        code.push_str(&format!("    '{}': instance.{}", field.name, field.name));
+        code.push_str(&format!("    '{}': (instance as dynamic).{}", field.name, field.name));
     }
     code.push_str("\n  };\n");
     code.push_str("}\n");
@@ -494,7 +600,7 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                     debug!("Found class_body for {}", class_name);
                     for body_item in member.children(&mut tree.walk()) {
                         debug!("Body item: {}", body_item.kind());
-                        // Extract fields from declaration
+                        // Extract fields from declaration (normal Dart class fields)
                         if body_item.kind() == "declaration" {
                             debug!("Found declaration, extracting fields...");
                             extract_fields_from_declaration(body_item, source, &mut fields, &tree);
@@ -503,6 +609,11 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                         else if body_item.kind() == "field_declaration" {
                             debug!("Found field_declaration, extracting fields...");
                             extract_fields_from_field_declaration(body_item, source, &mut fields, &tree);
+                        }
+                        // Handle variable declarations (another form of field declaration)
+                        else if body_item.kind() == "variable_declaration" {
+                            debug!("Found variable_declaration, extracting fields...");
+                            extract_field_from_variable_declaration(body_item, source, &mut fields, &tree);
                         }
                         // コンストラクタのパラメータを抽出
                         else if body_item.kind() == "constructor_signature" || body_item.kind() == "redirecting_factory_constructor_signature" {
@@ -521,6 +632,30 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                                             extract_field_from_parameter(param, source, &mut fields, &tree);
                                         } else if param.kind() == "typed_identifier" {
                                             extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // 通常のDartクラスのコンストラクタパラメータを抽出
+                        else if body_item.kind() == "constructor_declaration" {
+                            writeln!(file, "Found constructor_declaration").unwrap();
+                            for constructor_child in body_item.children(&mut tree.walk()) {
+                                writeln!(file, "  constructor_child: {}", constructor_child.kind()).unwrap();
+                                if constructor_child.kind() == "constructor_signature" {
+                                    for param_list in constructor_child.children(&mut tree.walk()) {
+                                        writeln!(file, "    param_list: {}", param_list.kind()).unwrap();
+                                        if param_list.kind() == "formal_parameter_list" {
+                                            for param in param_list.children(&mut tree.walk()) {
+                                                writeln!(file, "      param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
+                                                if param.kind() == "formal_parameter" {
+                                                    extract_field_from_formal_parameter(param, source, &mut fields, &tree);
+                                                } else if param.kind() == "default_formal_parameter" {
+                                                    extract_field_from_parameter(param, source, &mut fields, &tree);
+                                                } else if param.kind() == "typed_identifier" {
+                                                    extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -561,6 +696,10 @@ fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str,
     let mut field_type: Option<String> = None;
     let mut field_names = Vec::new();
     
+    // Get the full text of the declaration for nullable type detection
+    let declaration_text = declaration.utf8_text(source.as_bytes()).unwrap();
+    debug!("Declaration text: '{}'", declaration_text);
+    
     for child in declaration.children(&mut tree.walk()) {
         debug!("Declaration child: {}", child.kind());
         if child.kind() == "type_identifier" {
@@ -584,11 +723,21 @@ fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str,
     
     // Create field pairs
     if let Some(ty) = field_type {
+        debug!("Processing {} field names with type {}", field_names.len(), ty);
         for name in field_names {
             if !fields.iter().any(|f| f.name == name) {
-                fields.push(DartField { name, ty: ty.clone() });
+                // Check for nullable type in the declaration text
+                let final_type = if declaration_text.contains('?') && !ty.ends_with('?') {
+                    format!("{}?", ty)
+                } else {
+                    ty.clone()
+                };
+                fields.push(DartField { name: name.clone(), ty: final_type.clone() });
+                debug!("Added field: {} {}", final_type, name);
             }
         }
+    } else {
+        debug!("No field type found in declaration");
     }
     
     // Handle redirecting_factory_constructor_signature (existing logic)
@@ -659,11 +808,11 @@ fn extract_field_from_typed_identifier(typed_id: tree_sitter::Node, source: &str
 fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, _tree: &tree_sitter::Tree) {
     debug!("extract_field_from_formal_parameter called with kind: {}", param.kind());
     
-    // パラメータのテキスト全体を取得
+    // Get the full text of the parameter
     let param_text = param.utf8_text(source.as_bytes()).unwrap();
     debug!("Parameter text: '{}'", param_text);
     
-    // 型と名前を抽出する関数
+    // Function to extract type and name
     fn extract_type_and_name(node: tree_sitter::Node, source: &str) -> (Option<String>, Option<String>) {
         let mut field_type = None;
         let mut field_name = None;
@@ -704,11 +853,11 @@ fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, f
     let (ty, name) = extract_type_and_name(param, source);
     
     if let (Some(ty), Some(name)) = (ty, name) {
-        // パラメータテキストに?が含まれている場合は型名に?を付与
+        // If the parameter text contains ?, add ? to the type name
         let final_type = if param_text.contains('?') && !ty.ends_with('?') {
             format!("{}?", ty.clone())
         } else if param_text.contains('?') && ty.ends_with('?') {
-            ty.clone() // 既に?が付いている場合はそのまま
+            ty.clone() // If it already has ?, keep it
         } else {
             ty.clone()
         };
@@ -900,7 +1049,7 @@ class User {
         
         assert!(code.contains("// GENERATED CODE"));
         assert!(code.contains("User"));
-        assert!(code.contains("abstract class _$User"));
+        assert!(code.contains("mixin _User"));
         assert!(code.contains("copyWith"));
     }
 
