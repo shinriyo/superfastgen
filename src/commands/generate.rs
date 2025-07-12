@@ -494,12 +494,12 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                     debug!("Found class_body for {}", class_name);
                     for body_item in member.children(&mut tree.walk()) {
                         debug!("Body item: {}", body_item.kind());
-                        // フィールド宣言を抽出
+                        // Extract fields from declaration
                         if body_item.kind() == "declaration" {
                             debug!("Found declaration, extracting fields...");
                             extract_fields_from_declaration(body_item, source, &mut fields, &tree);
                         }
-                        // 通常のフィールド宣言も処理
+                        // Handle normal field declarations
                         else if body_item.kind() == "field_declaration" {
                             debug!("Found field_declaration, extracting fields...");
                             extract_fields_from_field_declaration(body_item, source, &mut fields, &tree);
@@ -557,7 +557,41 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
 fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
     debug!("extract_fields_from_declaration called with kind: {}", declaration.kind());
     
-    // redirecting_factory_constructor_signatureを処理
+    // Handle normal Dart class field declarations
+    let mut field_type: Option<String> = None;
+    let mut field_names = Vec::new();
+    
+    for child in declaration.children(&mut tree.walk()) {
+        debug!("Declaration child: {}", child.kind());
+        if child.kind() == "type_identifier" {
+            field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
+            debug!("Found type: {}", field_type.as_ref().unwrap());
+        } else if child.kind() == "initialized_identifier_list" {
+            // Extract field names from initialized_identifier_list
+            for identifier in child.children(&mut tree.walk()) {
+                if identifier.kind() == "initialized_identifier" {
+                    for id_child in identifier.children(&mut tree.walk()) {
+                        if id_child.kind() == "identifier" {
+                            let name = id_child.utf8_text(source.as_bytes()).unwrap().to_string();
+                            field_names.push(name.clone());
+                            debug!("Found name: {}", name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Create field pairs
+    if let Some(ty) = field_type {
+        for name in field_names {
+            if !fields.iter().any(|f| f.name == name) {
+                fields.push(DartField { name, ty: ty.clone() });
+            }
+        }
+    }
+    
+    // Handle redirecting_factory_constructor_signature (existing logic)
     for child in declaration.children(&mut tree.walk()) {
         debug!("Declaration child: {}", child.kind());
         if child.kind() == "redirecting_factory_constructor_signature" {
@@ -570,7 +604,7 @@ fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str,
                         if param.kind() == "formal_parameter" {
                             extract_field_from_formal_parameter(param, source, fields, tree);
                         } else if param.kind() == "optional_formal_parameters" {
-                            // Freezedのfactoryのフィールドはここに入る
+                            // Freezed factory fields go here
                             for opt_param in param.children(&mut tree.walk()) {
                                 if opt_param.kind() == "formal_parameter" {
                                     extract_field_from_formal_parameter(opt_param, source, fields, tree);
@@ -579,32 +613,6 @@ fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str,
                         }
                     }
                 }
-            }
-        } else {
-            // 既存の処理（通常のフィールド宣言）
-            let mut ty = String::new();
-            let mut name = String::new();
-            
-            if child.kind() == "type_identifier" {
-                ty = child.utf8_text(source.as_bytes()).unwrap().to_string();
-                debug!("Found type: {}", ty);
-            } else if child.kind() == "initialized_identifier_list" {
-                // フィールド名を抽出
-                for identifier in child.children(&mut tree.walk()) {
-                    if identifier.kind() == "initialized_identifier" {
-                        for id_child in identifier.children(&mut tree.walk()) {
-                            if id_child.kind() == "identifier" {
-                                name = id_child.utf8_text(source.as_bytes()).unwrap().to_string();
-                                debug!("Found name: {}", name);
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if !name.is_empty() && !ty.is_empty() {
-                debug!("Adding field: {} {}", ty, name);
-                fields.push(DartField { name, ty });
             }
         }
     }
@@ -749,77 +757,52 @@ fn extract_field_from_variable_declaration(var_decl: tree_sitter::Node, source: 
 
 fn extract_fields_from_field_declaration(field_decl: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
     debug!("extract_fields_from_field_declaration called with kind: {}", field_decl.kind());
-    
+
+    // Debug: print all child node kinds and their text
     for child in field_decl.children(&mut tree.walk()) {
-        debug!("Field declaration child: {}", child.kind());
-        
-        if child.kind() == "final_builtin" || child.kind() == "var_builtin" {
-            // final や var キーワードは無視
-            continue;
-        } else if child.kind() == "type_identifier" {
-            // 型情報を取得
-            let field_type = child.utf8_text(source.as_bytes()).unwrap().to_string();
-            debug!("Found field type: {}", field_type);
-            
-            // 次の兄弟ノードでフィールド名を探す
-            if let Some(next_sibling) = field_decl.next_sibling() {
-                for sibling_child in next_sibling.children(&mut tree.walk()) {
-                    if sibling_child.kind() == "initialized_identifier_list" {
-                        for identifier in sibling_child.children(&mut tree.walk()) {
-                            if identifier.kind() == "initialized_identifier" {
-                                for id_child in identifier.children(&mut tree.walk()) {
-                                    if id_child.kind() == "identifier" {
-                                        let field_name = id_child.utf8_text(source.as_bytes()).unwrap().to_string();
-                                        debug!("Found field name: {}", field_name);
-                                        
-                                        // nullable型かどうかをチェック
-                                        let final_type = if field_decl.utf8_text(source.as_bytes()).unwrap().contains('?') {
-                                            format!("{}?", field_type)
-                                        } else {
-                                            field_type.clone()
-                                        };
-                                        
-                                        if !fields.iter().any(|f| f.name == field_name) {
-                                            fields.push(DartField { name: field_name.clone(), ty: final_type.clone() });
-                                            debug!("Added field: {} {}", final_type, field_name);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else if child.kind() == "nullable_type" {
-            // nullable型の処理
-            for type_child in child.children(&mut tree.walk()) {
-                if type_child.kind() == "type_identifier" {
-                    let field_type = type_child.utf8_text(source.as_bytes()).unwrap().to_string();
-                    debug!("Found nullable field type: {}", field_type);
-                    
-                    // フィールド名を探す
-                    if let Some(next_sibling) = field_decl.next_sibling() {
-                        for sibling_child in next_sibling.children(&mut tree.walk()) {
-                            if sibling_child.kind() == "initialized_identifier_list" {
-                                for identifier in sibling_child.children(&mut tree.walk()) {
-                                    if identifier.kind() == "initialized_identifier" {
-                                        for id_child in identifier.children(&mut tree.walk()) {
-                                            if id_child.kind() == "identifier" {
-                                                let field_name = id_child.utf8_text(source.as_bytes()).unwrap().to_string();
-                                                debug!("Found nullable field name: {}", field_name);
-                                                
-                                                if !fields.iter().any(|f| f.name == field_name) {
-                                                    fields.push(DartField { name: field_name.clone(), ty: format!("{}?", field_type) });
-                                                    debug!("Added nullable field: {}? {}", field_type, field_name);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        let kind = child.kind();
+        let text = child.utf8_text(source.as_bytes()).unwrap_or("");
+        println!("[DEBUG] field_decl child kind: {} | text: {}", kind, text);
+    }
+
+    // Robustly extract all type/name pairs from field_declaration for normal Dart classes
+    let mut field_type: Option<String> = None;
+    let mut field_names = Vec::new();
+    
+    // Get the full text of the field declaration
+    let field_text = field_decl.utf8_text(source.as_bytes()).unwrap();
+    debug!("Field declaration text: '{}'", field_text);
+    
+    // Find type information
+    for child in field_decl.children(&mut tree.walk()) {
+        debug!("Child kind: {}", child.kind());
+        if child.kind() == "type_identifier" {
+            field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
+            debug!("Found type: {}", field_type.as_ref().unwrap());
+        }
+    }
+    
+    // Find variable names (there may be multiple variables declared)
+    for child in field_decl.children(&mut tree.walk()) {
+        if child.kind() == "identifier" {
+            let name = child.utf8_text(source.as_bytes()).unwrap().to_string();
+            field_names.push(name.clone());
+            debug!("Found field name: {}", name);
+        }
+    }
+    
+    // Create type/name pairs
+    if let Some(ty) = field_type {
+        for name in field_names {
+            if !fields.iter().any(|f| f.name == name) {
+                // Check for nullable type
+                let final_type = if field_text.contains('?') && !ty.ends_with('?') {
+                    format!("{}?", ty)
+                } else {
+                    ty.clone()
+                };
+                fields.push(DartField { name: name.clone(), ty: final_type.clone() });
+                debug!("Added field: {} {}", final_type, name);
             }
         }
     }
