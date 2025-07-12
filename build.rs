@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 
 fn main() {
@@ -20,6 +19,8 @@ fn main() {
             .file(parser_c)
             .file(scanner_c)
             .include(&tree_sitter_dart_dir.join("src"))
+            .flag_if_supported("-Wno-unused-parameter")  // 未使用パラメータ警告を抑制
+            .flag_if_supported("-Wno-unused-function")   // 未使用関数警告を抑制
             .compile("tree-sitter-dart");
         
         println!("cargo:rerun-if-changed=tree-sitter-dart/src/parser.c");

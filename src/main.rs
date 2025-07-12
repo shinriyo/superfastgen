@@ -10,6 +10,7 @@ use notify::{Watcher, RecursiveMode, RecommendedWatcher, Event, EventKind, Confi
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::path::Path;
+use log::info;
 
 #[derive(Parser)]
 #[command(name = "SuperFastGen")]
@@ -26,7 +27,8 @@ enum Commands {
 }
 
 fn main() {
-    println!("SuperFastGen - Code Generator");
+    env_logger::init();
+    info!("SuperFastGen - Code Generator");
     
     // ウォッチモード
     if std::env::args().any(|arg| arg == "--watch") {

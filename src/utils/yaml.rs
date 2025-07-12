@@ -1,4 +1,4 @@
-pub fn parse_pubspec_yaml(content: &str) -> Result<(), String> {
+pub fn parse_pubspec_yaml(_content: &str) -> Result<(), String> {
     println!("Parsing pubspec.yaml...");
     Ok(())
 }
