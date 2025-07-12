@@ -19,3 +19,8 @@ debug_ast.txt
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Test and experimental directories
+test_flutter_app/
+scripts/
+lib/gen/
