@@ -19,28 +19,116 @@ cargo install --path .
 
 ## 使用方法
 
-### 基本程式碼產生
+### CLI 子命令
+
+SuperFastGen 支援單獨的生成命令以提供更好的控制：
 
 ```bash
-superfastgen generate --input lib/ --output lib/gen/
+# 僅生成Freezed程式碼
+superfastgen generate --type freezed
+
+# 僅生成JSON序列化
+superfastgen generate --type json
+
+# 僅生成Riverpod提供者
+superfastgen generate --type riverpod
+
+# 生成所有程式碼類型（freezed、json、riverpod）
+superfastgen generate --type all
+
+# 僅生成資源
+superfastgen assets
+
+# 生成所有內容（程式碼和資源）
+superfastgen all
+
+# 以監視模式執行（檔案變更時自動重新生成）
+superfastgen --watch
 ```
 
-### 資源管理
+### 基本用法
 
 ```bash
-superfastgen assets --input assets/ --output lib/gen/
+# 執行程式碼產生器（生成所有類型）
+cargo run
+
+# 以監視模式執行（檔案變更時自動重新生成）
+cargo run -- --watch
 ```
 
-### 詳細選項
+### 設定
+
+在專案根目錄建立`superfastgen.yaml`檔案來自訂設定：
+
+```yaml
+generate:
+  input: lib/
+  output: lib/gen/
+  freezed: true
+  json: true
+  riverpod: true
+
+assets:
+  input: assets/
+  output: lib/gen/
+  include_images: true
+  include_fonts: true
+  include_icons: true
+```
+
+### 功能
+
+1. **資源生成**：
+
+   - 讀取`pubspec.yaml`
+   - 遞迴掃描資源目錄
+   - 生成`lib/gen/assets.gen.dart`
+
+2. **程式碼生成**：
+
+   - 掃描`lib/`中的 Dart 檔案
+   - 檢測註解：`@freezed`、`@JsonSerializable`、`@riverpod`
+   - 生成相應的`.g.dart`檔案
+
+3. **監視模式**：
+   - 監視`lib/`和`pubspec.yaml`的變更
+   - 檔案修改時自動重新生成程式碼
+   - 類似於`flutter pub run build_runner watch`
+
+### 輸出範例
+
+執行`superfastgen generate --type freezed`後，您將得到：
+
+```
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
+Generated 1 .g.dart files for freezed
+```
+
+執行`superfastgen assets`後，您將得到：
+
+```
+Generating assets from assets/ to lib/gen/...
+Generated assets.gen.dart with 6 asset constants
+```
+
+### 生成的檔案
+
+- `lib/user.g.dart` - Freezed 程式碼生成
+- `lib/product.g.dart` - JSON 序列化
+- `lib/provider.g.dart` - Riverpod 提供者
+- `lib/gen/assets.gen.dart` - 資源常數
+
+### 自訂路徑
+
+您可以指定自訂的輸入和輸出路徑：
 
 ```bash
-superfastgen generate \
-  --input lib/ \
-  --output lib/gen/ \
-  --freezed \
-  --json \
-  --riverpod \
-  --verbose
+# 使用自訂路徑
+superfastgen generate --type freezed --input src/ --output generated/
+
+# 使用自訂路徑生成資源
+superfastgen assets --assets my-assets/ --output lib/generated/
 ```
 
 ## 設定

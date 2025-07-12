@@ -19,31 +19,44 @@ cargo install --path .
 
 ## Cách sử dụng
 
-### Tạo mã cơ bản
+### CLI Subcommands
+
+SuperFastGen hỗ trợ các lệnh tạo mã riêng biệt để kiểm soát tốt hơn:
 
 ```bash
-superfastgen generate --input lib/ --output lib/gen/
+# Chỉ tạo mã Freezed
+superfastgen generate --type freezed
+
+# Chỉ tạo JSON serialization
+superfastgen generate --type json
+
+# Chỉ tạo Riverpod providers
+superfastgen generate --type riverpod
+
+# Tạo tất cả loại mã (freezed, json, riverpod)
+superfastgen generate --type all
+
+# Chỉ tạo assets
+superfastgen assets
+
+# Tạo tất cả (mã và assets)
+superfastgen all
+
+# Chạy ở chế độ watch (tự động tạo lại khi file thay đổi)
+superfastgen --watch
 ```
 
-### Quản lý tài nguyên
+### Cách sử dụng cơ bản
 
 ```bash
-superfastgen assets --input assets/ --output lib/gen/
+# Chạy code generator (tạo tất cả loại)
+cargo run
+
+# Chạy ở chế độ watch (tự động tạo lại khi file thay đổi)
+cargo run -- --watch
 ```
 
-### Tùy chọn chi tiết
-
-```bash
-superfastgen generate \
-  --input lib/ \
-  --output lib/gen/ \
-  --freezed \
-  --json \
-  --riverpod \
-  --verbose
-```
-
-## Cấu hình
+### Cấu hình
 
 Tạo file `superfastgen.yaml` ở thư mục gốc của dự án để tùy chỉnh cấu hình:
 
@@ -61,6 +74,61 @@ assets:
   include_images: true
   include_fonts: true
   include_icons: true
+```
+
+### Chức năng
+
+1. **Tạo Assets**:
+
+   - Đọc `pubspec.yaml`
+   - Quét thư mục assets một cách đệ quy
+   - Tạo `lib/gen/assets.gen.dart`
+
+2. **Tạo Mã**:
+
+   - Quét `lib/` cho các file Dart
+   - Phát hiện annotations: `@freezed`, `@JsonSerializable`, `@riverpod`
+   - Tạo các file `.g.dart` tương ứng
+
+3. **Chế độ Watch**:
+   - Giám sát `lib/` và `pubspec.yaml` để phát hiện thay đổi
+   - Tự động tạo lại mã khi file được sửa đổi
+   - Tương tự như `flutter pub run build_runner watch`
+
+### Ví dụ đầu ra
+
+Sau khi chạy `superfastgen generate --type freezed`, bạn sẽ có:
+
+```
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
+Generated 1 .g.dart files for freezed
+```
+
+Sau khi chạy `superfastgen assets`, bạn sẽ có:
+
+```
+Generating assets from assets/ to lib/gen/...
+Generated assets.gen.dart with 6 asset constants
+```
+
+### Các file được tạo
+
+- `lib/user.g.dart` - Tạo mã Freezed
+- `lib/product.g.dart` - JSON serialization
+- `lib/provider.g.dart` - Riverpod providers
+- `lib/gen/assets.gen.dart` - Asset constants
+
+### Đường dẫn tùy chỉnh
+
+Bạn có thể chỉ định đường dẫn đầu vào và đầu ra tùy chỉnh:
+
+```bash
+# Sử dụng đường dẫn tùy chỉnh
+superfastgen generate --type freezed --input src/ --output generated/
+
+# Tạo assets với đường dẫn tùy chỉnh
+superfastgen assets --assets my-assets/ --output lib/generated/
 ```
 
 ## Phát triển

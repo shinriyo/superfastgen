@@ -19,33 +19,46 @@ cargo install --path .
 
 ## Utilisation
 
-### Génération de code de base
+### Sous-commandes CLI
+
+SuperFastGen prend en charge des commandes de génération individuelles pour un meilleur contrôle :
 
 ```bash
-superfastgen generate --input lib/ --output lib/gen/
+# Générer uniquement le code Freezed
+superfastgen generate --type freezed
+
+# Générer uniquement la sérialisation JSON
+superfastgen generate --type json
+
+# Générer uniquement les providers Riverpod
+superfastgen generate --type riverpod
+
+# Générer tous les types de code (freezed, json, riverpod)
+superfastgen generate --type all
+
+# Générer uniquement les assets
+superfastgen assets
+
+# Générer tout (code et assets)
+superfastgen all
+
+# Exécuter en mode watch (régénération automatique lors des changements de fichiers)
+superfastgen --watch
 ```
 
-### Gestion des assets
+### Utilisation de base
 
 ```bash
-superfastgen assets --input assets/ --output lib/gen/
+# Exécuter le générateur de code (génère tous les types)
+cargo run
+
+# Exécuter en mode watch (régénération automatique lors des changements de fichiers)
+cargo run -- --watch
 ```
 
-### Options détaillées
+### Configuration
 
-```bash
-superfastgen generate \
-  --input lib/ \
-  --output lib/gen/ \
-  --freezed \
-  --json \
-  --riverpod \
-  --verbose
-```
-
-## Configuration
-
-Créez un fichier `superfastgen.yaml` à la racine du projet pour personnaliser la configuration :
+Créez un fichier `superfastgen.yaml` à la racine de votre projet pour personnaliser les paramètres :
 
 ```yaml
 generate:
@@ -61,6 +74,61 @@ assets:
   include_images: true
   include_fonts: true
   include_icons: true
+```
+
+### Fonctionnalités
+
+1. **Génération d'assets** :
+
+   - Lit `pubspec.yaml`
+   - Scanne récursivement les répertoires d'assets
+   - Génère `lib/gen/assets.gen.dart`
+
+2. **Génération de code** :
+
+   - Scanne `lib/` pour les fichiers Dart
+   - Détecte les annotations : `@freezed`, `@JsonSerializable`, `@riverpod`
+   - Génère les fichiers `.g.dart` correspondants
+
+3. **Mode watch** :
+   - Surveille `lib/` et `pubspec.yaml` pour les changements
+   - Régénère automatiquement le code lorsque les fichiers sont modifiés
+   - Similaire à `flutter pub run build_runner watch`
+
+### Exemple de sortie
+
+Après avoir exécuté `superfastgen generate --type freezed`, vous obtiendrez :
+
+```
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
+Generated 1 .g.dart files for freezed
+```
+
+Après avoir exécuté `superfastgen assets`, vous obtiendrez :
+
+```
+Generating assets from assets/ to lib/gen/...
+Generated assets.gen.dart with 6 asset constants
+```
+
+### Fichiers générés
+
+- `lib/user.g.dart` - Génération de code Freezed
+- `lib/product.g.dart` - Sérialisation JSON
+- `lib/provider.g.dart` - Providers Riverpod
+- `lib/gen/assets.gen.dart` - Constantes d'assets
+
+### Chemins personnalisés
+
+Vous pouvez spécifier des chemins d'entrée et de sortie personnalisés :
+
+```bash
+# Utiliser des chemins personnalisés
+superfastgen generate --type freezed --input src/ --output generated/
+
+# Générer des assets avec des chemins personnalisés
+superfastgen assets --assets my-assets/ --output lib/generated/
 ```
 
 ## Développement

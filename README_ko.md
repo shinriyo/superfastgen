@@ -19,31 +19,44 @@ cargo install --path .
 
 ## 사용법
 
-### 기본 코드 생성
+### CLI 서브커맨드
+
+SuperFastGen은 더 나은 제어를 위해 개별 생성 명령을 지원합니다:
 
 ```bash
-superfastgen generate --input lib/ --output lib/gen/
+# Freezed 코드만 생성
+superfastgen generate --type freezed
+
+# JSON 직렬화만 생성
+superfastgen generate --type json
+
+# Riverpod 제공자만 생성
+superfastgen generate --type riverpod
+
+# 모든 코드 타입 생성 (freezed, json, riverpod)
+superfastgen generate --type all
+
+# 자산만 생성
+superfastgen assets
+
+# 모든 것 생성 (코드와 자산)
+superfastgen all
+
+# 감시 모드로 실행 (파일 변경 시 자동 재생성)
+superfastgen --watch
 ```
 
-### 자산 관리
+### 기본 사용법
 
 ```bash
-superfastgen assets --input assets/ --output lib/gen/
+# 코드 생성기 실행 (모든 타입 생성)
+cargo run
+
+# 감시 모드로 실행 (파일 변경 시 자동 재생성)
+cargo run -- --watch
 ```
 
-### 상세 옵션
-
-```bash
-superfastgen generate \
-  --input lib/ \
-  --output lib/gen/ \
-  --freezed \
-  --json \
-  --riverpod \
-  --verbose
-```
-
-## 설정
+### 설정
 
 프로젝트 루트에 `superfastgen.yaml` 파일을 생성하여 설정을 사용자 정의할 수 있습니다:
 
@@ -61,6 +74,61 @@ assets:
   include_images: true
   include_fonts: true
   include_icons: true
+```
+
+### 기능
+
+1. **자산 생성**:
+
+   - `pubspec.yaml` 읽기
+   - 자산 디렉토리 재귀적으로 스캔
+   - `lib/gen/assets.gen.dart` 생성
+
+2. **코드 생성**:
+
+   - `lib/`의 Dart 파일 스캔
+   - 주석 감지: `@freezed`, `@JsonSerializable`, `@riverpod`
+   - 해당하는 `.g.dart` 파일 생성
+
+3. **감시 모드**:
+   - `lib/`와 `pubspec.yaml`의 변경 사항 모니터링
+   - 파일이 수정되면 자동으로 코드 재생성
+   - `flutter pub run build_runner watch`와 유사
+
+### 출력 예시
+
+`superfastgen generate --type freezed`를 실행한 후:
+
+```
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
+Generated 1 .g.dart files for freezed
+```
+
+`superfastgen assets`를 실행한 후:
+
+```
+Generating assets from assets/ to lib/gen/...
+Generated assets.gen.dart with 6 asset constants
+```
+
+### 생성된 파일
+
+- `lib/user.g.dart` - Freezed 코드 생성
+- `lib/product.g.dart` - JSON 직렬화
+- `lib/provider.g.dart` - Riverpod 제공자
+- `lib/gen/assets.gen.dart` - 자산 상수
+
+### 사용자 정의 경로
+
+사용자 정의 입력 및 출력 경로를 지정할 수 있습니다:
+
+```bash
+# 사용자 정의 경로 사용
+superfastgen generate --type freezed --input src/ --output generated/
+
+# 사용자 정의 경로로 자산 생성
+superfastgen assets --assets my-assets/ --output lib/generated/
 ```
 
 ## 개발

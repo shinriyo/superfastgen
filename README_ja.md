@@ -19,31 +19,44 @@ cargo install --path .
 
 ## 使用方法
 
-### 基本的なコード生成
+### CLI サブコマンド
+
+SuperFastGen は個別の生成コマンドをサポートして、より細かい制御が可能です：
 
 ```bash
-superfastgen generate --input lib/ --output lib/gen/
+# Freezedコードのみ生成
+superfastgen generate --type freezed
+
+# JSONシリアライゼーションのみ生成
+superfastgen generate --type json
+
+# Riverpodプロバイダーのみ生成
+superfastgen generate --type riverpod
+
+# すべてのコードタイプを生成（freezed、json、riverpod）
+superfastgen generate --type all
+
+# アセットのみ生成
+superfastgen assets
+
+# すべて生成（コードとアセット）
+superfastgen all
+
+# ウォッチモードで実行（ファイル変更時に自動再生成）
+superfastgen --watch
 ```
 
-### アセット管理
+### 基本的な使用方法
 
 ```bash
-superfastgen assets --input assets/ --output lib/gen/
+# コードジェネレーターを実行（すべてのタイプを生成）
+cargo run
+
+# ウォッチモードで実行（ファイル変更時に自動再生成）
+cargo run -- --watch
 ```
 
-### 詳細オプション
-
-```bash
-superfastgen generate \
-  --input lib/ \
-  --output lib/gen/ \
-  --freezed \
-  --json \
-  --riverpod \
-  --verbose
-```
-
-## 設定
+### 設定
 
 プロジェクトのルートに`superfastgen.yaml`ファイルを作成して設定をカスタマイズできます：
 
@@ -61,6 +74,61 @@ assets:
   include_images: true
   include_fonts: true
   include_icons: true
+```
+
+### 機能
+
+1. **アセット生成**:
+
+   - `pubspec.yaml`を読み込み
+   - アセットディレクトリを再帰的にスキャン
+   - `lib/gen/assets.gen.dart`を生成
+
+2. **コード生成**:
+
+   - `lib/`の Dart ファイルをスキャン
+   - アノテーションを検出: `@freezed`、`@JsonSerializable`、`@riverpod`
+   - 対応する`.g.dart`ファイルを生成
+
+3. **ウォッチモード**:
+   - `lib/`と`pubspec.yaml`の変更を監視
+   - ファイルが変更されると自動的にコードを再生成
+   - `flutter pub run build_runner watch`と同様
+
+### 出力例
+
+`superfastgen generate --type freezed`を実行すると：
+
+```
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
+Generated 1 .g.dart files for freezed
+```
+
+`superfastgen assets`を実行すると：
+
+```
+Generating assets from assets/ to lib/gen/...
+Generated assets.gen.dart with 6 asset constants
+```
+
+### 生成されるファイル
+
+- `lib/user.g.dart` - Freezed コード生成
+- `lib/product.g.dart` - JSON シリアライゼーション
+- `lib/provider.g.dart` - Riverpod プロバイダー
+- `lib/gen/assets.gen.dart` - アセット定数
+
+### カスタムパス
+
+カスタムの入力・出力パスを指定できます：
+
+```bash
+# カスタムパスを使用
+superfastgen generate --type freezed --input src/ --output generated/
+
+# カスタムパスでアセット生成
+superfastgen assets --assets my-assets/ --output lib/generated/
 ```
 
 ## 開発

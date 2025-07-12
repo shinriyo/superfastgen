@@ -55,7 +55,45 @@ cargo build
 cargo run
 ```
 
+### Updating tree-sitter-dart
+
+```bash
+# Manual update
+git submodule update --remote tree-sitter-dart
+cargo build
+
+# Or use the automated script
+./scripts/update-tree-sitter.sh
+```
+
 ## Usage
+
+### CLI Subcommands
+
+SuperFastGen supports individual generation commands for better control:
+
+```bash
+# Generate only Freezed code
+superfastgen generate --type freezed
+
+# Generate only JSON serialization
+superfastgen generate --type json
+
+# Generate only Riverpod providers
+superfastgen generate --type riverpod
+
+# Generate all code types (freezed, json, riverpod)
+superfastgen generate --type all
+
+# Generate only assets
+superfastgen assets
+
+# Generate everything (code and assets)
+superfastgen all
+
+# Run in watch mode (automatically regenerates on file changes)
+superfastgen --watch
+```
 
 ### Basic Usage
 
@@ -67,52 +105,80 @@ cargo run
 cargo run -- --watch
 ```
 
+### Configuration
+
+Create a `superfastgen.yaml` file in your project root to customize settings:
+
+```yaml
+generate:
+  input: lib/
+  output: lib/gen/
+  freezed: true
+  json: true
+  riverpod: true
+
+assets:
+  input: assets/
+  output: lib/gen/
+  include_images: true
+  include_fonts: true
+  include_icons: true
+```
+
 ### What it does
 
 1. **Asset Generation**:
 
-   - Reads `test_flutter_app/pubspec.yaml`
+   - Reads `pubspec.yaml`
    - Scans assets directories recursively
-   - Generates `test_flutter_app/lib/gen/assets.gen.dart`
+   - Generates `lib/gen/assets.gen.dart`
 
 2. **Code Generation**:
 
-   - Scans `test_flutter_app/lib/` for Dart files
+   - Scans `lib/` for Dart files
    - Detects annotations: `@freezed`, `@JsonSerializable`, `@riverpod`
    - Generates corresponding `.g.dart` files
 
 3. **Watch Mode**:
-   - Monitors `test_flutter_app/lib/` and `pubspec.yaml` for changes
+   - Monitors `lib/` and `pubspec.yaml` for changes
    - Automatically regenerates code when files are modified
    - Similar to `flutter pub run build_runner watch`
 
 ### Example Output
 
-After running `cargo run`, you'll get:
+After running `superfastgen generate --type freezed`, you'll get:
 
 ```
-Generating Freezed code...
-Generated: test_flutter_app/lib/user.g.dart
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
 Generated 1 .g.dart files for freezed
+```
 
-Generating JSON code...
-Generated: test_flutter_app/lib/product.g.dart
-Generated 1 .g.dart files for json
+After running `superfastgen assets`, you'll get:
 
-Generating Riverpod code...
-Generated: test_flutter_app/lib/provider.g.dart
-Generated 2 .g.dart files for riverpod
-
-Generating assets from test_flutter_app
+```
+Generating assets from assets/ to lib/gen/...
 Generated assets.gen.dart with 6 asset constants
 ```
 
 ### Generated Files
 
-- `test_flutter_app/lib/user.g.dart` - Freezed code generation
-- `test_flutter_app/lib/product.g.dart` - JSON serialization
-- `test_flutter_app/lib/provider.g.dart` - Riverpod providers
-- `test_flutter_app/lib/gen/assets.gen.dart` - Asset constants
+- `lib/user.g.dart` - Freezed code generation
+- `lib/product.g.dart` - JSON serialization
+- `lib/provider.g.dart` - Riverpod providers
+- `lib/gen/assets.gen.dart` - Asset constants
+
+### Custom Paths
+
+You can specify custom input and output paths:
+
+```bash
+# Use custom paths
+superfastgen generate --type freezed --input src/ --output generated/
+
+# Generate assets with custom paths
+superfastgen assets --assets my-assets/ --output lib/generated/
+```
 
 ### Custom Project Path
 

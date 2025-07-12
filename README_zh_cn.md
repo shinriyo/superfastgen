@@ -19,31 +19,44 @@ cargo install --path .
 
 ## 使用方法
 
-### 基本代码生成
+### CLI 子命令
+
+SuperFastGen 支持单独的生成命令以提供更好的控制：
 
 ```bash
-superfastgen generate --input lib/ --output lib/gen/
+# 仅生成Freezed代码
+superfastgen generate --type freezed
+
+# 仅生成JSON序列化
+superfastgen generate --type json
+
+# 仅生成Riverpod提供者
+superfastgen generate --type riverpod
+
+# 生成所有代码类型（freezed、json、riverpod）
+superfastgen generate --type all
+
+# 仅生成资源
+superfastgen assets
+
+# 生成所有内容（代码和资源）
+superfastgen all
+
+# 以监视模式运行（文件更改时自动重新生成）
+superfastgen --watch
 ```
 
-### 资源管理
+### 基本用法
 
 ```bash
-superfastgen assets --input assets/ --output lib/gen/
+# 运行代码生成器（生成所有类型）
+cargo run
+
+# 以监视模式运行（文件更改时自动重新生成）
+cargo run -- --watch
 ```
 
-### 详细选项
-
-```bash
-superfastgen generate \
-  --input lib/ \
-  --output lib/gen/ \
-  --freezed \
-  --json \
-  --riverpod \
-  --verbose
-```
-
-## 配置
+### 配置
 
 在项目根目录创建`superfastgen.yaml`文件来自定义配置：
 
@@ -61,6 +74,61 @@ assets:
   include_images: true
   include_fonts: true
   include_icons: true
+```
+
+### 功能
+
+1. **资源生成**：
+
+   - 读取`pubspec.yaml`
+   - 递归扫描资源目录
+   - 生成`lib/gen/assets.gen.dart`
+
+2. **代码生成**：
+
+   - 扫描`lib/`中的 Dart 文件
+   - 检测注解：`@freezed`、`@JsonSerializable`、`@riverpod`
+   - 生成相应的`.g.dart`文件
+
+3. **监视模式**：
+   - 监视`lib/`和`pubspec.yaml`的更改
+   - 文件修改时自动重新生成代码
+   - 类似于`flutter pub run build_runner watch`
+
+### 输出示例
+
+运行`superfastgen generate --type freezed`后，您将得到：
+
+```
+Generating Freezed code from lib/ to lib/gen/...
+Generated: lib/user.g.dart
+Generated 1 .g.dart files for freezed
+```
+
+运行`superfastgen assets`后，您将得到：
+
+```
+Generating assets from assets/ to lib/gen/...
+Generated assets.gen.dart with 6 asset constants
+```
+
+### 生成的文件
+
+- `lib/user.g.dart` - Freezed 代码生成
+- `lib/product.g.dart` - JSON 序列化
+- `lib/provider.g.dart` - Riverpod 提供者
+- `lib/gen/assets.gen.dart` - 资源常量
+
+### 自定义路径
+
+您可以指定自定义的输入和输出路径：
+
+```bash
+# 使用自定义路径
+superfastgen generate --type freezed --input src/ --output generated/
+
+# 使用自定义路径生成资源
+superfastgen assets --assets my-assets/ --output lib/generated/
 ```
 
 ## 开发
