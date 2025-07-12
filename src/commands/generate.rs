@@ -493,7 +493,7 @@ fn generate_json_code(class: &DartClass) -> String {
     
     // _$ClassNameFromJson関数
     code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class_name, class_name));
-    code.push_str(&format!("  return _{}(", class_name));
+    code.push_str(&format!("  return {}(", class_name));
     
     // フィールドのJSON解析を生成
     for (i, field) in fields.iter().enumerate() {
@@ -522,9 +522,6 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
     code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
-    
-    // GetUserNameRef 型
-    code.push_str("typedef GetUserNameRef = AutoDisposeFutureProviderRef<String>;\n\n");
     
     // getUserNameProvider
     code.push_str("final getUserNameProvider = AutoDisposeFutureProvider<String>((ref) async {\n");

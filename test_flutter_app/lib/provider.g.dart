@@ -2,8 +2,6 @@
 
 part of 'provider.dart';
 
-typedef GetUserNameRef = AutoDisposeFutureProviderRef<String>;
-
 final getUserNameProvider = AutoDisposeFutureProvider<String>((ref) async {
   // Simulate API call
   await Future.delayed(Duration(seconds: 1));
