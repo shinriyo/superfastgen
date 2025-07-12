@@ -34,26 +34,50 @@ pub struct DartField {
     pub ty: String,
 }
 
+#[allow(dead_code)]
 pub fn generate_freezed() {
     info!("Generating Freezed code...");
     generate_code_for_annotation("@freezed", "freezed")
 }
 
+#[allow(dead_code)]
 pub fn generate_json() {
     info!("Generating JSON code...");
     generate_code_for_annotation("@JsonSerializable", "json")
 }
 
+#[allow(dead_code)]
 pub fn generate_riverpod() {
     info!("Generating Riverpod code...");
     generate_code_for_annotation("@riverpod", "riverpod")
 }
 
+// New functions: configurable paths
+pub fn generate_freezed_with_paths(input_path: &str, output_path: &str) {
+    info!("Generating Freezed code from {} to {}...", input_path, output_path);
+    generate_code_for_annotation_with_paths("@freezed", "freezed", input_path, output_path)
+}
+
+pub fn generate_json_with_paths(input_path: &str, output_path: &str) {
+    info!("Generating JSON code from {} to {}...", input_path, output_path);
+    generate_code_for_annotation_with_paths("@JsonSerializable", "json", input_path, output_path)
+}
+
+pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
+    info!("Generating Riverpod code from {} to {}...", input_path, output_path);
+    generate_code_for_annotation_with_paths("@riverpod", "riverpod", input_path, output_path)
+}
+
+#[allow(dead_code)]
 fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
-    let dart_files = find_dart_files("test_flutter_app/lib");
+    generate_code_for_annotation_with_paths(annotation, generator_type, "test_flutter_app/lib", "test_flutter_app/lib/gen")
+}
+
+fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &str, input_path: &str, output_path: &str) {
+    let dart_files = find_dart_files(input_path);
     
     if dart_files.is_empty() {
-        info!("No Dart files found in test_flutter_app/lib");
+        info!("No Dart files found in {}", input_path);
         return;
     }
     
@@ -86,7 +110,7 @@ fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
     // 並列処理で.g.dartファイルを生成
     let results: Vec<GenerationResult> = target_classes
         .par_iter()
-        .filter_map(|class| generate_g_dart_file(class, generator_type))
+        .filter_map(|class| generate_g_dart_file_with_output_path(class, generator_type, output_path))
         .collect();
     
     // 結果を出力
@@ -192,9 +216,29 @@ fn find_class_definition(lines: &[&str], start_line: usize) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn generate_g_dart_file(class: &DartClass, generator_type: &str) -> Option<GenerationResult> {
     let input_file = &class.file_path;
     let output_file = input_file.with_extension("g.dart");
+    
+    let generated_code = match generator_type {
+        "freezed" => generate_freezed_code(class),
+        "json" => generate_json_code(class),
+        "riverpod" => generate_riverpod_code(class),
+        _ => return None,
+    };
+    
+    Some(GenerationResult {
+        input_file: input_file.clone(),
+        output_file,
+        generated_code,
+    })
+}
+
+fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, output_path: &str) -> Option<GenerationResult> {
+    let input_file = &class.file_path;
+    let output_file = PathBuf::from(output_path).join(input_file.file_name().unwrap());
+    let output_file = output_file.with_extension("g.dart");
     
     let generated_code = match generator_type {
         "freezed" => generate_freezed_code(class),
@@ -669,30 +713,37 @@ fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, f
     }
 }
 
-fn extract_field_from_variable_declaration(var_decl: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
-    let mut ty = String::new();
-    let mut name = String::new();
+#[allow(dead_code)]
+fn extract_field_from_variable_declaration(var_decl: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, _tree: &tree_sitter::Tree) {
+    let mut cursor = var_decl.walk();
     
-    for child in var_decl.children(&mut tree.walk()) {
-        if child.kind() == "typed_identifier" {
-            for t in child.children(&mut tree.walk()) {
-                if t.kind() == "type_identifier" {
-                    ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
-                } else if t.kind() == "identifier" {
-                    name = t.utf8_text(source.as_bytes()).unwrap().to_string();
+    for child in var_decl.children(&mut cursor) {
+        match child.kind() {
+            "variable_declarator" => {
+                let mut declarator_cursor = child.walk();
+                let mut type_node: Option<tree_sitter::Node> = None;
+                let mut name_node: Option<tree_sitter::Node> = None;
+                
+                for grandchild in child.children(&mut declarator_cursor) {
+                    match grandchild.kind() {
+                        "type_identifier" => type_node = Some(grandchild),
+                        "identifier" => name_node = Some(grandchild),
+                        _ => {}
+                    }
+                }
+                
+                if let (Some(type_node), Some(name_node)) = (type_node, name_node) {
+                    let field_type = type_node.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                    let field_name = name_node.utf8_text(source.as_bytes()).unwrap_or("unknown").to_string();
+                    
+                    fields.push(DartField {
+                        name: field_name,
+                        ty: field_type,
+                    });
                 }
             }
-        } else if child.kind() == "identifier" {
-            name = child.utf8_text(source.as_bytes()).unwrap().to_string();
+            _ => {}
         }
-    }
-    
-    if !name.is_empty() {
-        // 型が抽出されていない場合は、デフォルトでdynamicを使用
-        if ty.is_empty() {
-            ty = "dynamic".to_string();
-        }
-        fields.push(DartField { name, ty });
     }
 }
 
@@ -866,7 +917,8 @@ class User {
         
         assert!(code.contains("// GENERATED CODE"));
         assert!(code.contains("User"));
-        assert!(code.contains("Freezed code"));
+        assert!(code.contains("abstract class _$User"));
+        assert!(code.contains("copyWith"));
     }
 
     #[test]
@@ -881,7 +933,8 @@ class User {
         
         assert!(code.contains("// GENERATED CODE"));
         assert!(code.contains("Product"));
-        assert!(code.contains("JSON serialization"));
+        assert!(code.contains("_$ProductFromJson"));
+        assert!(code.contains("_$ProductToJson"));
     }
 
     #[test]
@@ -895,8 +948,9 @@ class User {
         let code = generate_riverpod_code(&class);
         
         assert!(code.contains("// GENERATED CODE"));
-        assert!(code.contains("Provider"));
-        assert!(code.contains("Riverpod code"));
+        assert!(code.contains("GetUserNameRef"));
+        assert!(code.contains("getUserNameProvider"));
+        assert!(code.contains("_$UserNotifier"));
     }
 
     #[test]

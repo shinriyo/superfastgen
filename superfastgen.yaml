@@ -1,0 +1,13 @@
+generate:
+  input: lib/
+  output: lib/gen/
+  freezed: true
+  json: true
+  riverpod: true
+
+assets:
+  input: assets/
+  output: lib/gen/
+  include_images: true
+  include_fonts: true
+  include_icons: true
