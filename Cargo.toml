@@ -2,6 +2,20 @@
 name = "superfastgen"
 version = "0.1.0"
 edition = "2021"
+description = "Blazing fast code generator for Dart/Flutter projects with tree-sitter parsing"
+license = "MIT"
+repository = "https://github.com/shinriyo/superfastgen"
+keywords = ["flutter", "dart", "codegen", "freezed", "riverpod", "tree-sitter", "assets"]
+categories = ["development-tools", "code-generation"]
+authors = ["shinriyo <shinriyo@gmail.com>"]
+readme = "README.md"
+homepage = "https://github.com/shinriyo/superfastgen"
+documentation = "https://github.com/shinriyo/superfastgen#readme"
+rust-version = "1.70"
+
+[[bin]]
+name = "superfastgen"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -18,3 +32,7 @@ env_logger = "0.11"
 
 [build-dependencies]
 cc = "1" # tree-sitter-dart ビルド用（後ほど）
+
+[[bin]]
+name = "update-tree-sitter"
+path = "scripts/update-tree-sitter.sh"
