@@ -2,6 +2,16 @@
 
 A high-performance code generator for Flutter/Dart projects written in Rust.
 
+## 🌍 Available Languages / 利用可能な言語 / Ngôn ngữ có sẵn / 可用语言 / 可用語言 / 사용 가능한 언어 / Langues disponibles
+
+- [English](README.md) (Default)
+- [日本語](README.ja.md)
+- [Tiếng Việt](README.vi.md)
+- [简体中文](README.zh-CN.md)
+- [繁體中文](README.zh-TW.md)
+- [한국어](README.ko.md)
+- [Français](README.fr.md)
+
 ## Features
 
 - **Freezed Code Generation**: Generate immutable data classes with Freezed
