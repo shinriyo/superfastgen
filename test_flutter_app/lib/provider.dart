@@ -11,7 +11,7 @@ Future<String> getUserName(Ref ref) async {
 }
 
 @riverpod
-class UserNotifier extends _$UserNotifier {
+class UserNotifier extends Notifier<String> {
   @override
   String build() {
     return 'Initial state';

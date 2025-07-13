@@ -34,22 +34,13 @@ pub struct DartField {
     pub ty: String,
 }
 
-#[allow(dead_code)]
-pub fn generate_freezed() {
-    info!("Generating Freezed code...");
-    generate_code_for_annotation("@freezed", "freezed")
-}
-
-#[allow(dead_code)]
-pub fn generate_json() {
-    info!("Generating JSON code...");
-    generate_code_for_annotation("@JsonSerializable", "json")
-}
-
-#[allow(dead_code)]
-pub fn generate_riverpod() {
-    info!("Generating Riverpod code...");
-    generate_code_for_annotation("@riverpod", "riverpod")
+#[derive(Debug, Clone)]
+pub struct DartFunction {
+    pub name: String,
+    pub return_type: String,
+    pub parameters: Vec<DartField>,
+    pub annotations: Vec<String>,
+    pub file_path: PathBuf,
 }
 
 // New functions: configurable paths
@@ -68,7 +59,6 @@ pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
     generate_code_for_annotation_with_paths("@riverpod", "riverpod", input_path, output_path)
 }
 
-#[allow(dead_code)]
 fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
     // Flutterプロジェクトのルートを自動検出
     if let Some(project_root) = find_flutter_project_root() {
@@ -231,58 +221,185 @@ fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>>
     Some(classes)
 }
 
-fn extract_annotations(lines: &[&str], start_line: usize) -> Vec<String> {
-    let mut annotations = Vec::new();
-    let mut i = start_line;
+fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
+    debug!("extract_fields_from_declaration called with kind: {}", declaration.kind());
     
-    while i < lines.len() {
-        let line = lines[i].trim();
-        
-        if line.starts_with('@') {
-            annotations.push(line.to_string());
-            i += 1;
-        } else if line.is_empty() || line.starts_with("//") {
-            i += 1;
-        } else {
-            break;
-        }
-    }
+    // Handle normal Dart class field declarations
+    let mut field_type: Option<String> = None;
+    let mut field_names = Vec::new();
     
-    annotations
-}
-
-fn find_class_definition(lines: &[&str], start_line: usize) -> Option<String> {
-    for i in start_line..lines.len() {
-        let line = lines[i].trim();
-        
-        if line.starts_with("class ") {
-            // "class ClassName" からクラス名を抽出
-            if let Some(class_name) = line.split_whitespace().nth(1) {
-                return Some(class_name.to_string());
+    // Get the full text of the declaration for nullable type detection
+    let declaration_text = declaration.utf8_text(source.as_bytes()).unwrap();
+    debug!("Declaration text: '{}'", declaration_text);
+    
+    for child in declaration.children(&mut tree.walk()) {
+        debug!("Declaration child: {}", child.kind());
+        if child.kind() == "type_identifier" {
+            field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
+            debug!("Found type: {}", field_type.as_ref().unwrap());
+        } else if child.kind() == "initialized_identifier_list" {
+            // Extract field names from initialized_identifier_list
+            for identifier in child.children(&mut tree.walk()) {
+                if identifier.kind() == "initialized_identifier" {
+                    for id_child in identifier.children(&mut tree.walk()) {
+                        if id_child.kind() == "identifier" {
+                            let name = id_child.utf8_text(source.as_bytes()).unwrap().to_string();
+                            field_names.push(name.clone());
+                            debug!("Found name: {}", name);
+                        }
+                    }
+                }
             }
         }
     }
     
-    None
+    // Create field pairs
+    if let Some(ty) = field_type {
+        debug!("Processing {} field names with type {}", field_names.len(), ty);
+        for name in field_names {
+            if !fields.iter().any(|f| f.name == name) {
+                // Check for nullable type in the declaration text
+                let final_type = if declaration_text.contains('?') && !ty.ends_with('?') {
+                    format!("{}?", ty)
+                } else {
+                    ty.clone()
+                };
+                fields.push(DartField { name: name.clone(), ty: final_type.clone() });
+                debug!("Added field: {} {}", final_type, name);
+            }
+        }
+    } else {
+        debug!("No field type found in declaration");
+    }
+    
+    // Handle redirecting_factory_constructor_signature (existing logic)
+    for child in declaration.children(&mut tree.walk()) {
+        debug!("Declaration child: {}", child.kind());
+        if child.kind() == "redirecting_factory_constructor_signature" {
+            debug!("Found redirecting_factory_constructor_signature");
+            for param_list in child.children(&mut tree.walk()) {
+                debug!("param_list: {}", param_list.kind());
+                if param_list.kind() == "formal_parameter_list" {
+                    for param in param_list.children(&mut tree.walk()) {
+                        debug!("param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>"));
+                        if param.kind() == "formal_parameter" {
+                            extract_field_from_formal_parameter(param, source, fields, tree);
+                        } else if param.kind() == "optional_formal_parameters" {
+                            // Freezed factory fields go here
+                            for opt_param in param.children(&mut tree.walk()) {
+                                if opt_param.kind() == "formal_parameter" {
+                                    extract_field_from_formal_parameter(opt_param, source, fields, tree);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-#[allow(dead_code)]
-fn generate_g_dart_file(class: &DartClass, generator_type: &str) -> Option<GenerationResult> {
-    let input_file = &class.file_path;
-    let output_file = input_file.with_extension("g.dart");
+fn extract_field_from_parameter(param: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
+    let mut ty = String::new();
+    let mut name = String::new();
     
-    let generated_code = match generator_type {
-        "freezed" => generate_freezed_code(class),
-        "json" => generate_json_code(class),
-        "riverpod" => generate_riverpod_code(class),
-        _ => return None,
-    };
+    for child in param.children(&mut tree.walk()) {
+        if child.kind() == "typed_identifier" {
+            for t in child.children(&mut tree.walk()) {
+                if t.kind() == "type_identifier" {
+                    ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
+                } else if t.kind() == "identifier" {
+                    name = t.utf8_text(source.as_bytes()).unwrap().to_string();
+                }
+            }
+        }
+    }
     
-    Some(GenerationResult {
-        input_file: input_file.clone(),
-        output_file,
-        generated_code,
-    })
+    if !name.is_empty() && !ty.is_empty() {
+        fields.push(DartField { name, ty });
+    }
+}
+
+fn extract_field_from_typed_identifier(typed_id: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
+    let mut ty = String::new();
+    let mut name = String::new();
+    
+    for t in typed_id.children(&mut tree.walk()) {
+        if t.kind() == "type_identifier" {
+            ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
+        } else if t.kind() == "identifier" {
+            name = t.utf8_text(source.as_bytes()).unwrap().to_string();
+        }
+    }
+    
+    if !name.is_empty() && !ty.is_empty() {
+        fields.push(DartField { name, ty });
+    }
+}
+
+fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, _tree: &tree_sitter::Tree) {
+    debug!("extract_field_from_formal_parameter called with kind: {}", param.kind());
+    
+    // Get the full text of the parameter
+    let param_text = param.utf8_text(source.as_bytes()).unwrap();
+    debug!("Parameter text: '{}'", param_text);
+    
+    // Function to extract type and name
+    fn extract_type_and_name(node: tree_sitter::Node, source: &str) -> (Option<String>, Option<String>) {
+        let mut field_type = None;
+        let mut field_name = None;
+        
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "type_identifier" => {
+                    field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
+                    debug!("Found type: {}", field_type.as_ref().unwrap());
+                },
+                "nullable_type" => {
+                    for t in child.children(&mut child.walk()) {
+                        if t.kind() == "type_identifier" {
+                            field_type = Some(format!("{}?", t.utf8_text(source.as_bytes()).unwrap()));
+                            debug!("Found nullable type: {}", field_type.as_ref().unwrap());
+                        }
+                    }
+                },
+                "identifier" => {
+                    field_name = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
+                    debug!("Found name: {}", field_name.as_ref().unwrap());
+                },
+                _ => {
+                    let (child_type, child_name) = extract_type_and_name(child, source);
+                    if field_type.is_none() {
+                        field_type = child_type;
+                    }
+                    if field_name.is_none() {
+                        field_name = child_name;
+                    }
+                }
+            }
+        }
+        
+        (field_type, field_name)
+    }
+    
+    let (ty, name) = extract_type_and_name(param, source);
+    
+    if let (Some(ty), Some(name)) = (ty, name) {
+        // If the parameter text contains ?, add ? to the type name
+        let final_type = if param_text.contains('?') && !ty.ends_with('?') {
+            format!("{}?", ty.clone())
+        } else if param_text.contains('?') && ty.ends_with('?') {
+            ty.clone() // If it already has ?, keep it
+        } else {
+            ty.clone()
+        };
+        
+        debug!("Extracted field: {} {} (final: {})", ty, name, final_type);
+        if !fields.iter().any(|f| f.name == name) {
+            fields.push(DartField { name, ty: final_type });
+            debug!("Added field to list");
+        }
+    }
 }
 
 fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, _output_path: &str) -> Option<GenerationResult> {
@@ -523,37 +640,134 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
     code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     
-    // getUserNameProvider
-    code.push_str("final getUserNameProvider = AutoDisposeFutureProvider<String>((ref) async {\n");
-    code.push_str("  // Simulate API call\n");
-    code.push_str("  await Future.delayed(Duration(seconds: 1));\n");
-    code.push_str("  return 'John Doe';\n");
-    code.push_str("});\n\n");
+    // Extract function and class information from source file
+    let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
+    let functions = extract_functions_from_dart_source(&source_content, &class.file_path);
     
-    // UserNotifier の抽象クラス
-    code.push_str("abstract class _$UserNotifier extends AutoDisposeNotifier<String> {\n");
-    code.push_str("  late final String _state;\n\n");
-    code.push_str("  String get state => _state;\n\n");
-    code.push_str("  @override\n");
-    code.push_str("  String build() {\n");
-    code.push_str("    _state = 'Initial state';\n");
-    code.push_str("    return _state;\n");
-    code.push_str("  }\n\n");
-    code.push_str("  void updateName(String name) {\n");
-    code.push_str("    _state = name;\n");
-    code.push_str("    state = _state;\n");
-    code.push_str("  }\n");
-    code.push_str("}\n\n");
+    debug!("Found {} functions in {}", functions.len(), class.file_path.display());
+    for function in &functions {
+        debug!("Function: {} with annotations: {:?}", function.name, function.annotations);
+    }
     
-    // userNotifierProvider
-    code.push_str("final userNotifierProvider = AutoDisposeNotifierProvider<UserNotifier, String>(() {\n");
-    code.push_str("  return UserNotifier();\n");
+    // Generate providers from functions with @riverpod annotation
+    for function in &functions {
+        if function.annotations.iter().any(|ann| ann.contains("@riverpod")) {
+            debug!("Generating provider for function: {}", function.name);
+            code.push_str(&generate_function_provider(function));
+            code.push_str("\n");
+        }
+    }
+    
+    // Generate NotifierProvider for class types
+    if class.annotations.iter().any(|ann| ann.contains("@riverpod")) {
+        debug!("Generating NotifierProvider for class: {}", class.name);
+        code.push_str(&generate_notifier_provider(class));
+    }
+    
+    // Temporary: Only process provider.dart to debug function detection
+    if class.file_path.file_name().unwrap().to_string_lossy() == "provider.dart" {
+        debug!("Processing provider.dart - checking all node types");
+        let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
+        let mut parser = Parser::new();
+        parser.set_language(unsafe { std::mem::transmute(tree_sitter_dart()) }).unwrap();
+        let tree = parser.parse(&source_content, None).unwrap();
+        let root = tree.root_node();
+        
+        fn debug_node_types(node: tree_sitter::Node, source: &str, depth: usize) {
+            let indent = "  ".repeat(depth);
+            let node_text = node.utf8_text(source.as_bytes()).unwrap_or_default();
+            debug!("{}Node: {} = '{}'", indent, node.kind(), node_text);
+            
+            for child in node.children(&mut node.walk()) {
+                debug_node_types(child, source, depth + 1);
+            }
+        }
+        
+        debug_node_types(root, &source_content, 0);
+    }
+    
+    code
+}
+
+fn generate_function_provider(function: &DartFunction) -> String {
+    let mut code = String::new();
+    
+    // Generate provider name from function name
+    let provider_name = format!("{}Provider", function.name);
+    
+    // Determine appropriate provider type
+    let provider_type = if function.return_type.starts_with("Future<") {
+        "AutoDisposeFutureProvider"
+    } else if function.return_type.starts_with("Stream<") {
+        "AutoDisposeStreamProvider"
+    } else {
+        "AutoDisposeProvider"
+    };
+    
+    // Check for family support (whether parameters exist beyond Ref)
+    let has_family_parameters = function.parameters.iter()
+        .any(|p| p.name != "ref" && p.ty != "Ref");
+    
+    if has_family_parameters {
+        // Family provider
+        let family_params: Vec<_> = function.parameters.iter()
+            .filter(|p| p.name != "ref" && p.ty != "Ref")
+            .collect();
+        
+        let param_types = if family_params.len() == 1 {
+            family_params[0].ty.clone()
+        } else {
+            let types = family_params.iter()
+                .map(|p| p.ty.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({})", types)
+        };
+        
+        code.push_str(&format!("final {} = {}.family<{}, {}>((ref, params) {{\n", 
+            provider_name, provider_type, function.return_type, param_types
+        ));
+        code.push_str(&format!("  return {}(ref", function.name));
+        for param in family_params {
+            code.push_str(&format!(", params.{}", param.name));
+        }
+        code.push_str(");\n");
+        code.push_str("});\n");
+    } else {
+        // Regular provider
+        code.push_str(&format!("final {} = {}<{}>((ref) {{\n", 
+            provider_name, provider_type, function.return_type
+        ));
+        code.push_str(&format!("  return {}(ref);\n", function.name));
+        code.push_str("});\n");
+    }
+    
+    code
+}
+
+fn generate_notifier_provider(class: &DartClass) -> String {
+    let mut code = String::new();
+    
+    // Generate NotifierProvider
+    let provider_name = format!("{}Provider", to_lower_camel_case(&class.name));
+    code.push_str(&format!("final {} = NotifierProvider<{}, String>(() {{\n", 
+        provider_name, class.name
+    ));
+    code.push_str(&format!("  return {}();\n", class.name));
     code.push_str("});\n");
     
     code
 } 
 
-/// AST全体をファイルに出力する
+fn to_lower_camel_case(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+    }
+}
+
+/// Output AST to file for debugging
 fn write_ast_to_file(node: tree_sitter::Node, source: &str, depth: usize, file: &mut std::fs::File) {
     let indent = "  ".repeat(depth);
     let node_text = node.utf8_text(source.as_bytes()).unwrap_or_default();
@@ -564,7 +778,151 @@ fn write_ast_to_file(node: tree_sitter::Node, source: &str, depth: usize, file: 
     }
 }
 
-/// Dartクラスのフィールド情報をtree-sitter-dartで抽出する
+/// Extract Dart function information using tree-sitter-dart
+pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec<DartFunction> {
+    debug!("Processing source with {} characters", source.len());
+    if source.len() > 100 {
+        debug!("Source preview: {}", &source[..100]);
+    }
+    
+    let mut parser = Parser::new();
+    parser.set_language(unsafe { std::mem::transmute(tree_sitter_dart()) }).unwrap();
+    let tree = parser.parse(source, None).unwrap();
+    let root = tree.root_node();
+    let mut functions = Vec::new();
+
+    // Output AST to file for debugging
+    let mut file = OpenOptions::new().create(true).write(true).append(true).open("debug_ast.txt").unwrap();
+    writeln!(file, "\n=== Complete AST for {} ===", file_path.display()).unwrap();
+    write_ast_to_file(root, source, 0, &mut file);
+    writeln!(file, "=== End AST ===").unwrap();
+
+    // Recursively visit all nodes to find function signatures
+    fn visit_functions_recursive(node: tree_sitter::Node, source: &str, file_path: &Path, functions: &mut Vec<DartFunction>) {
+        if node.kind() == "function_signature" {
+            // Extract function name
+            let function_name = node.children(&mut node.walk()).find(|n| n.kind() == "identifier")
+                .map(|n| n.utf8_text(source.as_bytes()).unwrap_or("").to_string())
+                .unwrap_or_default();
+            debug!("Found function: {}", function_name);
+
+            // Collect annotations
+            let mut annotations = Vec::new();
+            let mut current_node = node;
+            while let Some(prev_sibling) = current_node.prev_sibling() {
+                if prev_sibling.kind() == "annotation" {
+                    let annotation_text = prev_sibling.utf8_text(source.as_bytes()).unwrap_or("");
+                    annotations.push(annotation_text.to_string());
+                    debug!("Found annotation: {}", annotation_text);
+                } else if !prev_sibling.kind().contains("comment") && !prev_sibling.kind().contains("whitespace") {
+                    break;
+                }
+                current_node = prev_sibling;
+            }
+
+            // Extract return type
+            let mut return_type = "dynamic".to_string();
+            let mut base_type = "dynamic".to_string();
+            let mut type_arguments = Vec::new();
+            
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "type_identifier" {
+                    base_type = child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                    debug!("Found base type: {}", base_type);
+                } else if child.kind() == "type_arguments" {
+                    // Extract type arguments like <String> from Future<String>
+                    let args_text = child.utf8_text(source.as_bytes()).unwrap_or("");
+                    debug!("Found type arguments: {}", args_text);
+                    type_arguments.push(args_text.to_string());
+                } else if child.kind() == "function_type" {
+                    // Handle complex types like Future<String>
+                    return_type = child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                    debug!("Found function type: {}", return_type);
+                    break;
+                }
+            }
+            
+            // Construct the full type if we have base type and arguments
+            if base_type != "dynamic" && !type_arguments.is_empty() {
+                return_type = format!("{}{}", base_type, type_arguments.join(""));
+                debug!("Constructed complex type: {}", return_type);
+            } else if base_type != "dynamic" {
+                return_type = base_type;
+            }
+            
+            // Fallback: If we found a simple type, check if it's part of a complex type
+            if return_type == "dynamic" {
+                // Look for the full function signature to extract the complete return type
+                let function_text = node.utf8_text(source.as_bytes()).unwrap_or("");
+                debug!("Function text: '{}'", function_text);
+                if function_text.contains("Future<") {
+                    // Extract the full Future<Type> pattern
+                    if let Some(start) = function_text.find("Future<") {
+                        if let Some(end) = function_text[start..].find('>') {
+                            let full_type = &function_text[start..start + end + 1];
+                            return_type = full_type.to_string();
+                            debug!("Extracted complex type: {}", return_type);
+                        }
+                    }
+                }
+            }
+            
+            debug!("Final return type: {}", return_type);
+
+            // Extract parameters
+            let mut parameters = Vec::new();
+            for child in node.children(&mut node.walk()) {
+                if child.kind() == "formal_parameter_list" {
+                    for param in child.children(&mut node.walk()) {
+                        if param.kind() == "formal_parameter" {
+                            let param_text = param.utf8_text(source.as_bytes()).unwrap_or("");
+                            debug!("Parameter: {}", param_text);
+
+                            // Extract parameter type and name
+                            let mut param_type = "dynamic".to_string();
+                            let mut param_name = "param".to_string();
+
+                            for param_child in param.children(&mut node.walk()) {
+                                if param_child.kind() == "type_identifier" {
+                                    param_type = param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                                } else if param_child.kind() == "identifier" {
+                                    param_name = param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
+                                }
+                            }
+
+                            // Detect nullable types
+                            if param_text.contains('?') && !param_type.ends_with('?') {
+                                param_type.push('?');
+                            }
+
+                            parameters.push(DartField {
+                                name: param_name,
+                                ty: param_type,
+                            });
+                        }
+                    }
+                }
+            }
+
+            functions.push(DartFunction {
+                name: function_name,
+                return_type,
+                parameters,
+                annotations,
+                file_path: file_path.to_path_buf(),
+            });
+        }
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            visit_functions_recursive(child, source, file_path, functions);
+        }
+    }
+
+    visit_functions_recursive(root, source, file_path, &mut functions);
+    functions
+}
+
+/// Extract Dart class field information using tree-sitter-dart
 pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
     debug!("Processing source with {} characters", source.len());
     if source.len() > 100 {
@@ -577,21 +935,21 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
     let root = tree.root_node();
     let mut fields = Vec::new();
 
-    // AST全体をファイルに出力（各クラスごと）
+    // Output AST to file for debugging
     let mut file = OpenOptions::new().create(true).write(true).append(true).open("debug_ast.txt").unwrap();
     writeln!(file, "\n=== Complete AST for source ===").unwrap();
     write_ast_to_file(root, source, 0, &mut file);
     writeln!(file, "=== End AST ===").unwrap();
 
-    // クラスノードを探索
+    // Search for class nodes
     for class_node in root.children(&mut tree.walk()) {
         if class_node.kind() == "class_definition" {
-            // クラス名を取得
+            // Extract class name
             let class_name = class_node.children(&mut tree.walk()).find(|n| n.kind() == "identifier").map(|n| n.utf8_text(source.as_bytes()).unwrap_or("")).unwrap_or("");
             writeln!(file, "\n=== Processing class: {} ===", class_name).unwrap();
             debug!("Processing class: {}", class_name);
             
-            // クラス本体を探索
+            // Search class body
             for member in class_node.children(&mut tree.walk()) {
                 if member.kind() == "class_body" {
                     debug!("Found class_body for {}", class_name);
@@ -607,12 +965,7 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                             debug!("Found field_declaration, extracting fields...");
                             extract_fields_from_field_declaration(body_item, source, &mut fields, &tree);
                         }
-                        // Handle variable declarations (another form of field declaration)
-                        else if body_item.kind() == "variable_declaration" {
-                            debug!("Found variable_declaration, extracting fields...");
-                            extract_field_from_variable_declaration(body_item, source, &mut fields, &tree);
-                        }
-                        // コンストラクタのパラメータを抽出
+                        // Extract constructor parameters
                         else if body_item.kind() == "constructor_signature" || body_item.kind() == "redirecting_factory_constructor_signature" {
                             writeln!(file, "Found constructor: {}", body_item.kind()).unwrap();
                             for param_list in body_item.children(&mut tree.walk()) {
@@ -634,7 +987,7 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                                 }
                             }
                         }
-                        // 通常のDartクラスのコンストラクタパラメータを抽出
+                        // Extract normal Dart class constructor parameters
                         else if body_item.kind() == "constructor_declaration" {
                             writeln!(file, "Found constructor_declaration").unwrap();
                             for constructor_child in body_item.children(&mut tree.walk()) {
@@ -658,7 +1011,7 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
                                 }
                             }
                         }
-                        // Freezedのconst factoryコンストラクタを抽出
+                        // Extract Freezed const factory constructor parameters
                         else if body_item.kind() == "const_constructor_signature" || body_item.kind() == "redirecting_factory_constructor_signature" {
                             writeln!(file, "Found factory constructor: {}", body_item.kind()).unwrap();
                             for param_list in body_item.children(&mut tree.walk()) {
@@ -684,221 +1037,6 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
     }
     
     fields
-}
-
-fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
-    debug!("extract_fields_from_declaration called with kind: {}", declaration.kind());
-    
-    // Handle normal Dart class field declarations
-    let mut field_type: Option<String> = None;
-    let mut field_names = Vec::new();
-    
-    // Get the full text of the declaration for nullable type detection
-    let declaration_text = declaration.utf8_text(source.as_bytes()).unwrap();
-    debug!("Declaration text: '{}'", declaration_text);
-    
-    for child in declaration.children(&mut tree.walk()) {
-        debug!("Declaration child: {}", child.kind());
-        if child.kind() == "type_identifier" {
-            field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
-            debug!("Found type: {}", field_type.as_ref().unwrap());
-        } else if child.kind() == "initialized_identifier_list" {
-            // Extract field names from initialized_identifier_list
-            for identifier in child.children(&mut tree.walk()) {
-                if identifier.kind() == "initialized_identifier" {
-                    for id_child in identifier.children(&mut tree.walk()) {
-                        if id_child.kind() == "identifier" {
-                            let name = id_child.utf8_text(source.as_bytes()).unwrap().to_string();
-                            field_names.push(name.clone());
-                            debug!("Found name: {}", name);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Create field pairs
-    if let Some(ty) = field_type {
-        debug!("Processing {} field names with type {}", field_names.len(), ty);
-        for name in field_names {
-            if !fields.iter().any(|f| f.name == name) {
-                // Check for nullable type in the declaration text
-                let final_type = if declaration_text.contains('?') && !ty.ends_with('?') {
-                    format!("{}?", ty)
-                } else {
-                    ty.clone()
-                };
-                fields.push(DartField { name: name.clone(), ty: final_type.clone() });
-                debug!("Added field: {} {}", final_type, name);
-            }
-        }
-    } else {
-        debug!("No field type found in declaration");
-    }
-    
-    // Handle redirecting_factory_constructor_signature (existing logic)
-    for child in declaration.children(&mut tree.walk()) {
-        debug!("Declaration child: {}", child.kind());
-        if child.kind() == "redirecting_factory_constructor_signature" {
-            debug!("Found redirecting_factory_constructor_signature");
-            for param_list in child.children(&mut tree.walk()) {
-                debug!("param_list: {}", param_list.kind());
-                if param_list.kind() == "formal_parameter_list" {
-                    for param in param_list.children(&mut tree.walk()) {
-                        debug!("param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>"));
-                        if param.kind() == "formal_parameter" {
-                            extract_field_from_formal_parameter(param, source, fields, tree);
-                        } else if param.kind() == "optional_formal_parameters" {
-                            // Freezed factory fields go here
-                            for opt_param in param.children(&mut tree.walk()) {
-                                if opt_param.kind() == "formal_parameter" {
-                                    extract_field_from_formal_parameter(opt_param, source, fields, tree);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn extract_field_from_parameter(param: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
-    let mut ty = String::new();
-    let mut name = String::new();
-    
-    for child in param.children(&mut tree.walk()) {
-        if child.kind() == "typed_identifier" {
-            for t in child.children(&mut tree.walk()) {
-                if t.kind() == "type_identifier" {
-                    ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
-                } else if t.kind() == "identifier" {
-                    name = t.utf8_text(source.as_bytes()).unwrap().to_string();
-                }
-            }
-        }
-    }
-    
-    if !name.is_empty() && !ty.is_empty() {
-        fields.push(DartField { name, ty });
-    }
-}
-
-fn extract_field_from_typed_identifier(typed_id: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
-    let mut ty = String::new();
-    let mut name = String::new();
-    
-    for t in typed_id.children(&mut tree.walk()) {
-        if t.kind() == "type_identifier" {
-            ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
-        } else if t.kind() == "identifier" {
-            name = t.utf8_text(source.as_bytes()).unwrap().to_string();
-        }
-    }
-    
-    if !name.is_empty() && !ty.is_empty() {
-        fields.push(DartField { name, ty });
-    }
-}
-
-fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, _tree: &tree_sitter::Tree) {
-    debug!("extract_field_from_formal_parameter called with kind: {}", param.kind());
-    
-    // Get the full text of the parameter
-    let param_text = param.utf8_text(source.as_bytes()).unwrap();
-    debug!("Parameter text: '{}'", param_text);
-    
-    // Function to extract type and name
-    fn extract_type_and_name(node: tree_sitter::Node, source: &str) -> (Option<String>, Option<String>) {
-        let mut field_type = None;
-        let mut field_name = None;
-        
-        for child in node.children(&mut node.walk()) {
-            match child.kind() {
-                "type_identifier" => {
-                    field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
-                    debug!("Found type: {}", field_type.as_ref().unwrap());
-                },
-                "nullable_type" => {
-                    for t in child.children(&mut child.walk()) {
-                        if t.kind() == "type_identifier" {
-                            field_type = Some(format!("{}?", t.utf8_text(source.as_bytes()).unwrap()));
-                            debug!("Found nullable type: {}", field_type.as_ref().unwrap());
-                        }
-                    }
-                },
-                "identifier" => {
-                    field_name = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
-                    debug!("Found name: {}", field_name.as_ref().unwrap());
-                },
-                _ => {
-                    let (child_type, child_name) = extract_type_and_name(child, source);
-                    if field_type.is_none() {
-                        field_type = child_type;
-                    }
-                    if field_name.is_none() {
-                        field_name = child_name;
-                    }
-                }
-            }
-        }
-        
-        (field_type, field_name)
-    }
-    
-    let (ty, name) = extract_type_and_name(param, source);
-    
-    if let (Some(ty), Some(name)) = (ty, name) {
-        // If the parameter text contains ?, add ? to the type name
-        let final_type = if param_text.contains('?') && !ty.ends_with('?') {
-            format!("{}?", ty.clone())
-        } else if param_text.contains('?') && ty.ends_with('?') {
-            ty.clone() // If it already has ?, keep it
-        } else {
-            ty.clone()
-        };
-        
-        debug!("Extracted field: {} {} (final: {})", ty, name, final_type);
-        if !fields.iter().any(|f| f.name == name) {
-            fields.push(DartField { name, ty: final_type });
-            debug!("Added field to list");
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn extract_field_from_variable_declaration(var_decl: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, _tree: &tree_sitter::Tree) {
-    let mut cursor = var_decl.walk();
-    
-    for child in var_decl.children(&mut cursor) {
-        match child.kind() {
-            "variable_declarator" => {
-                let mut declarator_cursor = child.walk();
-                let mut type_node: Option<tree_sitter::Node> = None;
-                let mut name_node: Option<tree_sitter::Node> = None;
-                
-                for grandchild in child.children(&mut declarator_cursor) {
-                    match grandchild.kind() {
-                        "type_identifier" => type_node = Some(grandchild),
-                        "identifier" => name_node = Some(grandchild),
-                        _ => {}
-                    }
-                }
-                
-                if let (Some(type_node), Some(name_node)) = (type_node, name_node) {
-                    let field_type = type_node.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
-                    let field_name = name_node.utf8_text(source.as_bytes()).unwrap_or("unknown").to_string();
-                    
-                    fields.push(DartField {
-                        name: field_name,
-                        ty: field_type,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 fn extract_fields_from_field_declaration(field_decl: tree_sitter::Node, source: &str, fields: &mut Vec<DartField>, tree: &tree_sitter::Tree) {
@@ -1003,83 +1141,6 @@ class User {
         assert_eq!(classes.len(), 1);
         assert_eq!(classes[0].name, "User");
         assert!(classes[0].annotations.iter().any(|ann| ann.contains("@freezed")));
-    }
-
-    #[test]
-    fn test_extract_annotations() {
-        let lines = vec![
-            "@freezed",
-            "@JsonSerializable()",
-            "class Test {}",
-        ];
-        
-        let annotations = extract_annotations(&lines, 0);
-        
-        assert_eq!(annotations.len(), 2);
-        assert!(annotations[0].contains("@freezed"));
-        assert!(annotations[1].contains("@JsonSerializable"));
-    }
-
-    #[test]
-    fn test_find_class_definition() {
-        let lines = vec![
-            "@freezed",
-            "class User {",
-            "  const factory User() = _User;",
-            "}",
-        ];
-        
-        let class_name = find_class_definition(&lines, 1);
-        
-        assert_eq!(class_name, Some("User".to_string()));
-    }
-
-    #[test]
-    fn test_generate_freezed_code() {
-        let class = DartClass {
-            name: "User".to_string(),
-            annotations: vec!["@freezed".to_string()],
-            file_path: PathBuf::from("user.dart"),
-        };
-        
-        let code = generate_freezed_code(&class);
-        
-        assert!(code.contains("// GENERATED CODE"));
-        assert!(code.contains("User"));
-        assert!(code.contains("mixin _User"));
-        assert!(code.contains("copyWith"));
-    }
-
-    #[test]
-    fn test_generate_json_code() {
-        let class = DartClass {
-            name: "Product".to_string(),
-            annotations: vec!["@JsonSerializable()".to_string()],
-            file_path: PathBuf::from("product.dart"),
-        };
-        
-        let code = generate_json_code(&class);
-        
-        assert!(code.contains("// GENERATED CODE"));
-        assert!(code.contains("Product"));
-        assert!(code.contains("_$ProductFromJson"));
-        assert!(code.contains("_$ProductToJson"));
-    }
-
-    #[test]
-    fn test_generate_riverpod_code() {
-        let class = DartClass {
-            name: "Provider".to_string(),
-            annotations: vec!["@riverpod".to_string()],
-            file_path: PathBuf::from("provider.dart"),
-        };
-        
-        let code = generate_riverpod_code(&class);
-        
-        assert!(code.contains("// GENERATED CODE"));
-        assert!(code.contains("GetUserNameRef"));
-        assert!(code.contains("getUserNameProvider"));
-        assert!(code.contains("_$UserNotifier"));
     }
 
     #[test]

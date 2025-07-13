@@ -24,12 +24,6 @@ impl Default for FlutterSection {
     }
 }
 
-#[allow(dead_code)]
-pub fn generate_assets() {
-    generate_assets_from_path("test_flutter_app")
-}
-
-#[allow(dead_code)]
 pub fn generate_assets_from_path(project_path: &str) {
     println!("Generating assets from {}", project_path);
     
@@ -216,16 +210,6 @@ fn asset_file_to_constant_name(asset_file: &str) -> String {
     
     constant_name
 }
-
-#[allow(dead_code)]
-pub fn process_images() {
-    println!("Processing images...");
-}
-
-#[allow(dead_code)]
-pub fn process_fonts() {
-    println!("Processing fonts...");
-} 
 
 #[cfg(test)]
 mod tests {
