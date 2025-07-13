@@ -11,6 +11,9 @@ debug_ast.txt
 *.swo
 *~
 
+# Dart/Flutter tool files
+.dart_tool/
+
 # OS generated files
 .DS_Store?
 ._*
