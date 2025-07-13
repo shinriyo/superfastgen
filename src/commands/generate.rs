@@ -7,7 +7,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use log::{info, debug, error};
 
-// tree-sitterのFFIバインディング
+// tree-sitter FFI bindings
 #[link(name = "tree-sitter-dart")]
 extern "C" {
     fn tree_sitter_dart() -> *const std::ffi::c_void;
@@ -32,7 +32,7 @@ struct GenerationResult {
 pub struct DartField {
     pub name: String,
     pub ty: String,
-    pub is_named: bool, // 追加
+    pub is_named: bool, // Added
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +67,7 @@ pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
 }
 
 fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
-    // Flutterプロジェクトのルートを自動検出
+    // Auto-detect Flutter project root
     if let Some(project_root) = find_flutter_project_root() {
         let lib_path = project_root.join("lib");
         let lib_path_str = lib_path.to_string_lossy();
@@ -75,7 +75,7 @@ fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
         info!("Using Flutter project: {}", project_root.display());
         info!("Lib directory: {}", lib_path_str);
         
-        // 出力先はlibディレクトリと同じ場所（.g.dartファイルは元のファイルと同じディレクトリに）
+        // Output to same location as lib directory (.g.dart files in same directory as original files)
         generate_code_for_annotation_with_paths(annotation, generator_type, &lib_path_str, &lib_path_str)
     } else {
         error!("No Flutter project found. Make sure you're in a directory with pubspec.yaml and lib/");
@@ -86,30 +86,28 @@ fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
 fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &str, input_path: &str, output_path: &str) {
     eprintln!("[DEBUG] generate_code_for_annotation_with_paths called: annotation={}, generator_type={}, input_path={}, output_path={}", annotation, generator_type, input_path, output_path);
     
-    // 強制的にtest_flutter_app/aminomi/lib/models/を使用
-    let actual_input_path = "test_flutter_app/aminomi/lib/models";
-    eprintln!("[DEBUG] Using actual input path: {}", actual_input_path);
+    eprintln!("[DEBUG] Using input path: {}", input_path);
     
-    let dart_files = find_dart_files(actual_input_path);
-    debug!("Found {} Dart files in {}", dart_files.len(), actual_input_path);
+    let dart_files = find_dart_files(input_path);
+    debug!("Found {} Dart files in {}", dart_files.len(), input_path);
     for file in &dart_files {
         eprintln!("[DEBUG] Dart file found: {}", file.display());
         debug!("  - {}", file.display());
     }
     
     if dart_files.is_empty() {
-        info!("No Dart files found in {}", actual_input_path);
+        info!("No Dart files found in {}", input_path);
         return;
     }
     
-    // 並列処理でDartファイルをパース
+            // Parse Dart files in parallel
     let classes: Vec<DartClass> = dart_files
         .par_iter()
         .filter_map(|file_path| parse_dart_file(file_path))
         .flatten()
         .collect();
     
-    // 指定されたアノテーションを持つクラスをフィルタ（重複を除去）
+            // Filter classes with specified annotation (remove duplicates)
     let mut target_classes: Vec<DartClass> = classes
         .into_iter()
         .filter(|class| {
@@ -123,7 +121,7 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
         })
         .collect();
     
-    // 重複を除去（同じクラス名とファイルパスの組み合わせ）
+            // Remove duplicates (same class name and file path combination)
     target_classes.dedup_by(|a, b| a.name == b.name && a.file_path == b.file_path);
     
     debug!("Found {} classes with annotation '{}':", target_classes.len(), annotation);
@@ -136,13 +134,13 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
         return;
     }
     
-    // 並列処理で.g.dartファイルを生成
+            // Generate .g.dart files in parallel
     let results: Vec<GenerationResult> = target_classes
         .par_iter()
         .filter_map(|class| generate_g_dart_file_with_output_path(class, generator_type, output_path))
         .collect();
     
-    // 結果を出力
+            // Output results
     let results_count = results.len();
     for result in results {
         if let Err(e) = fs::write(&result.output_file, &result.generated_code) {
@@ -158,7 +156,7 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
 fn find_flutter_project_root() -> Option<PathBuf> {
     let mut current_dir = std::env::current_dir().ok()?;
     
-    // 上位ディレクトリを探索してpubspec.yamlを探す
+    // Search parent directories for pubspec.yaml
     loop {
         let pubspec_path = current_dir.join("pubspec.yaml");
         let lib_path = current_dir.join("lib");
@@ -168,7 +166,7 @@ fn find_flutter_project_root() -> Option<PathBuf> {
             return Some(current_dir);
         }
         
-        // 親ディレクトリに移動
+        // Move to parent directory
         if !current_dir.pop() {
             break;
         }
@@ -180,14 +178,7 @@ fn find_flutter_project_root() -> Option<PathBuf> {
 fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
     let mut dart_files = Vec::new();
     
-    // 一時的にtest_flutter_app/aminomi/lib/models/をデフォルトに設定
-    let search_path = if dir_path == "lib" {
-        "test_flutter_app/aminomi/lib/models"
-    } else {
-        dir_path
-    };
-    
-    for entry in WalkDir::new(search_path).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             let path = entry.path();
             if let Some(extension) = path.extension() {
@@ -211,7 +202,7 @@ fn parse_dart_file(file_path: &Path) -> Option<Vec<DartClass>> {
         }
     };
     
-    // 簡易的なパース（実際のtree-sitter-dartの実装は複雑なため、正規表現で代替）
+    // Simple parsing (using regex as tree-sitter-dart implementation is complex)
     parse_dart_content(&content, file_path)
 }
 
@@ -226,7 +217,7 @@ fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>>
         if trimmed.starts_with('@') {
             pending_annotations.push(trimmed.to_string());
         } else if trimmed.starts_with("class ") || trimmed.starts_with("abstract class ") {
-            // "class ClassName" or "abstract class ClassName" からクラス名を抽出
+            // Extract class name from "class ClassName" or "abstract class ClassName"
             let class_name = if trimmed.starts_with("abstract class ") {
                 trimmed.split_whitespace().nth(2)
             } else {
@@ -469,7 +460,7 @@ fn generate_freezed_code(class: &DartClass) -> String {
     }
 
     if union_cases.len() > 1 {
-        // union型（sealed class）: 各ケースを独立したクラスとして生成
+        // Union type (sealed class): Generate each case as independent class
         for case in &union_cases {
             let case_class_name = format!("{}{}", class_name, to_pascal_case(&case.case_name));
             code.push_str(&format!("class {} implements {} {{\n", case_class_name, class_name));
@@ -510,7 +501,7 @@ fn generate_freezed_code(class: &DartClass) -> String {
             code.push_str("}\n\n");
         }
     } else {
-        // 通常クラス
+        // Regular class
         let fields = extract_fields_from_dart_class(&source_content, class_name);
         code.push_str(&format!("mixin _${} {{\n", class_name));
         code.push_str(&format!("  {} copyWith({{", class_name));
@@ -672,13 +663,13 @@ fn generate_json_code(class: &DartClass) -> String {
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
     let union_cases = extract_union_cases_from_dart_class(&source_content, class_name);
     if union_cases.len() > 1 {
-        // union型（sealed class）: 各ケースクラスの定義のみ生成（Json関数は生成しない）
+        // Union type (sealed class): Only case class definitions are generated (Json functions are not generated)
         for case in &union_cases {
             let case_class_name = format!("{}{}", class_name, to_pascal_case(&case.case_name));
             code.push_str(&format!("// {}: generated by Rust, JSON serialization is handled by build_runner\n", case_class_name));
         }
     } else {
-        // 通常クラス: クラス定義のみ生成（Json関数は生成しない）
+        // Regular class: Only class definition is generated (Json functions are not generated)
         code.push_str(&format!("// {}: generated by Rust, JSON serialization is handled by build_runner\n", class_name));
     }
     code
@@ -821,16 +812,85 @@ fn generate_function_provider(function: &DartFunction) -> String {
 fn generate_notifier_provider(class: &DartClass) -> String {
     let mut code = String::new();
     
+    // Parse the class to determine its actual type
+    let class_content = match std::fs::read_to_string(&class.file_path) {
+        Ok(content) => content,
+        Err(_) => return String::new(),
+    };
+    
+    // Extract the class type from the class definition
+    let class_type = extract_class_type_from_content(&class_content, &class.name);
+    
+    // Generate the _$ClassName class (build_runner compatible)
+    let generated_class_name = format!("_${}", class.name);
+    code.push_str(&format!("abstract class {} extends Notifier<{}> {{\n", generated_class_name, class_type));
+    code.push_str(&format!("  @override\n"));
+    code.push_str(&format!("  {} build();\n", class_type));
+    code.push_str("}\n\n");
+    
     // Generate NotifierProvider
     let provider_name = format!("{}Provider", to_lower_camel_case(&class.name));
-    code.push_str(&format!("final {} = NotifierProvider<{}, String>(() {{\n", 
-        provider_name, class.name
+    code.push_str(&format!("final {} = NotifierProvider<{}, {}>(() {{\n", 
+        provider_name, class.name, class_type
     ));
     code.push_str(&format!("  return {}();\n", class.name));
     code.push_str("});\n");
     
     code
-} 
+}
+
+fn extract_class_type_from_content(content: &str, class_name: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    
+    // First, try to find the build() method to determine the correct type
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("@override") {
+            // Look for the next line which should be the build method
+            if i + 1 < lines.len() {
+                let next_line = lines[i + 1].trim();
+                if next_line.starts_with("AuthState build()") || next_line.starts_with("String build()") || next_line.starts_with("bool build()") {
+                    // Extract the return type from the build method
+                    if next_line.contains("AuthState") {
+                        return "AuthState".to_string();
+                    } else if next_line.contains("String") {
+                        return "String".to_string();
+                    } else if next_line.contains("bool") {
+                        return "bool".to_string();
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback: look for class definition
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("class ") && trimmed.contains(class_name) {
+            // Look for "extends Notifier<Type>" or "extends _$ClassName"
+            if trimmed.contains("extends _$") {
+                // For generated classes, extract the type from the class name
+                // Remove "Notifier" suffix if present
+                let type_name = if class_name.ends_with("Notifier") {
+                    class_name.trim_end_matches("Notifier").to_string()
+                } else {
+                    class_name.to_string()
+                };
+                return type_name;
+            } else if trimmed.contains("extends Notifier<") {
+                // Extract type from "extends Notifier<Type>"
+                if let Some(start) = trimmed.find("Notifier<") {
+                    if let Some(end) = trimmed[start..].find('>') {
+                        return trimmed[start + 9..start + end].to_string();
+                    }
+                }
+            }
+        }
+    }
+    
+    // Default fallback
+    "String".to_string()
+}
 
 fn to_lower_camel_case(s: &str) -> String {
     let mut c = s.chars();
@@ -941,89 +1001,62 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                 current_node = prev_sibling;
             }
 
-            // Extract return type
+            // Extract return type (with nullable support)
             let mut return_type = "dynamic".to_string();
             let mut base_type = "dynamic".to_string();
             let mut type_arguments = Vec::new();
-            
+            let mut found_nullable = false;
             for child in node.children(&mut node.walk()) {
-                if child.kind() == "type_identifier" {
+                if child.kind() == "nullable_type" {
+                    // e.g. AppUser?
+                    found_nullable = true;
+                    for nullable_child in child.children(&mut child.walk()) {
+                        if nullable_child.kind() == "type_identifier" {
+                            base_type = nullable_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                        }
+                        if nullable_child.kind() == "type_arguments" {
+                            let args_text = nullable_child.utf8_text(source.as_bytes()).unwrap_or("");
+                            type_arguments.push(args_text.to_string());
+                        }
+                    }
+                } else if child.kind() == "type_identifier" {
                     base_type = child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
-                    debug!("Found base type: {}", base_type);
                 } else if child.kind() == "type_arguments" {
-                    // Extract type arguments like <String> from Future<String>
                     let args_text = child.utf8_text(source.as_bytes()).unwrap_or("");
-                    debug!("Found type arguments: {}", args_text);
                     type_arguments.push(args_text.to_string());
                 } else if child.kind() == "function_type" {
-                    // Handle complex types like Future<String>
                     return_type = child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
-                    debug!("Found function type: {}", return_type);
                     break;
                 }
             }
-            
             // Construct the full type if we have base type and arguments
             if base_type != "dynamic" && !type_arguments.is_empty() {
                 return_type = format!("{}{}", base_type, type_arguments.join(""));
-                debug!("Constructed complex type: {}", return_type);
             } else if base_type != "dynamic" {
                 return_type = base_type;
             }
-            
+            if found_nullable && !return_type.ends_with('?') {
+                return_type = format!("{}?", return_type);
+            }
             // Fallback: If we found a simple type, check if it's part of a complex type
             if return_type == "dynamic" {
-                // Look for the full function signature to extract the complete return type
                 let function_text = node.utf8_text(source.as_bytes()).unwrap_or("");
-                debug!("Function text: '{}'", function_text);
                 if function_text.contains("Future<") {
-                    // Extract the full Future<Type> pattern
                     if let Some(start) = function_text.find("Future<") {
                         if let Some(end) = function_text[start..].find('>') {
                             let full_type = &function_text[start..start + end + 1];
                             return_type = full_type.to_string();
-                            debug!("Extracted complex type: {}", return_type);
                         }
                     }
                 } else if function_text.contains("List<") {
-                    // Extract the full List<Type> pattern
                     if let Some(start) = function_text.find("List<") {
                         if let Some(end) = function_text[start..].find('>') {
                             let full_type = &function_text[start..start + end + 1];
                             return_type = full_type.to_string();
-                            debug!("Extracted List type: {}", return_type);
                         }
                     }
                 }
             }
-            
-            debug!("Final return type: {}", return_type);
-
-            // Extract the clean return type for provider generation
-            // If the return type is Future<T> or Stream<T>, extract T
-            let clean_return_type = if return_type.starts_with("Future<") || return_type.starts_with("Stream<") {
-                if let Some(start) = return_type.find('<') {
-                    if let Some(end) = return_type.rfind('>') {
-                        return_type[start + 1..end].trim().to_string()
-                    } else {
-                        return_type.clone()
-                    }
-                } else {
-                    return_type.clone()
-                }
-            } else if return_type.starts_with("List<") {
-                if let Some(end) = return_type.find('>') {
-                    return_type[..=end].trim().to_string()
-                } else {
-                    return_type.clone()
-                }
-            } else if let Some(comma_pos) = return_type.find(", (") {
-                return_type[..comma_pos].trim().to_string()
-            } else {
-                return_type.clone()
-            };
-            debug!("Original return_type: '{}', clean_return_type: '{}'", return_type, clean_return_type);
-            // --- ここまで修正 ---
 
             // Extract parameters
             let mut parameters = Vec::new();
@@ -1031,7 +1064,6 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                 if child.kind() == "formal_parameter_list" {
                     for param in child.children(&mut node.walk()) {
                         debug!("Parameter node: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or(""));
-                        
                         if param.kind() == "formal_parameter" {
                             let param_text = param.utf8_text(source.as_bytes()).unwrap_or("");
                             debug!("Formal parameter: {}", param_text);
@@ -1045,7 +1077,6 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                                     param_name = param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
                                 }
                             }
-                            // Detect nullable types
                             if param_text.contains('?') && !param_type.ends_with('?') {
                                 param_type.push('?');
                             }
@@ -1056,7 +1087,6 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                             });
                         } else if param.kind() == "optional_formal_parameters" {
                             debug!("Found optional formal parameters");
-                            // Handle named parameters like {required int page, int limit = 10}
                             for opt_param in param.children(&mut node.walk()) {
                                 if opt_param.kind() == "formal_parameter" {
                                     let opt_param_text = opt_param.utf8_text(source.as_bytes()).unwrap_or("");
@@ -1065,14 +1095,10 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                                     let mut param_name = "param".to_string();
                                     let mut is_named = true;
                                     for opt_param_child in opt_param.children(&mut node.walk()) {
-                                        match opt_param_child.kind() {
-                                            "type_identifier" => {
-                                                param_type = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
-                                            },
-                                            "identifier" => {
-                                                param_name = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
-                                            },
-                                            _ => {}
+                                        if opt_param_child.kind() == "type_identifier" {
+                                            param_type = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                                        } else if opt_param_child.kind() == "identifier" {
+                                            param_name = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
                                         }
                                     }
                                     if opt_param_text.contains('?') && !param_type.ends_with('?') {
@@ -1089,21 +1115,18 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                     }
                 }
             }
-
             functions.push(DartFunction {
                 name: function_name,
-                return_type: return_type, // Use the original type for provider generation
+                return_type,
                 parameters,
                 annotations,
                 file_path: file_path.to_path_buf(),
             });
         }
-        // Recurse into children
         for child in node.children(&mut node.walk()) {
             visit_functions_recursive(child, source, file_path, functions);
         }
     }
-
     visit_functions_recursive(root, source, file_path, &mut functions);
     functions
 }
@@ -1330,12 +1353,12 @@ mod tests {
 
     #[test]
     fn test_find_dart_files() {
-        // テスト用の一時ディレクトリを作成
+        // Create a temporary directory for testing
         let temp_dir = TempDir::new().unwrap();
         let lib_dir = temp_dir.path().join("lib");
         fs::create_dir_all(&lib_dir).unwrap();
 
-        // テスト用Dartファイルを作成
+        // Create a test Dart file
         fs::write(lib_dir.join("test.dart"), "class Test {}").unwrap();
         fs::write(lib_dir.join("test.txt"), "not a dart file").unwrap();
 
@@ -1384,7 +1407,7 @@ class User with _$User {
         let fields = extract_fields_from_dart_class(freezed_source, "User");
         debug!("Extracted fields: {:?}", fields);
         
-        // 期待されるフィールドを確認
+        // Check expected fields
         assert_eq!(fields.len(), 3);
         
         let name_field = fields.iter().find(|f| f.name == "name").unwrap();
@@ -1452,7 +1475,7 @@ pub fn extract_union_cases_from_dart_class(source: &str, target_class_name: &str
             }
         }
     }
-    // デバッグ出力
+    // Debug output
     eprintln!("[DEBUG] union cases for {}:", target_class_name);
     for case in &cases {
         eprintln!("  case: {}", case.case_name);
