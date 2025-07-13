@@ -44,6 +44,12 @@ pub struct DartFunction {
     pub file_path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct CaseInfo {
+    pub case_name: String,
+    pub fields: Vec<DartField>,
+}
+
 // New functions: configurable paths
 pub fn generate_freezed_with_paths(input_path: &str, output_path: &str) {
     info!("Generating Freezed code from {} to {}...", input_path, output_path);
@@ -78,10 +84,21 @@ fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
 }
 
 fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &str, input_path: &str, output_path: &str) {
-    let dart_files = find_dart_files(input_path);
+    eprintln!("[DEBUG] generate_code_for_annotation_with_paths called: annotation={}, generator_type={}, input_path={}, output_path={}", annotation, generator_type, input_path, output_path);
+    
+    // 強制的にtest_flutter_app/aminomi/lib/models/を使用
+    let actual_input_path = "test_flutter_app/aminomi/lib/models";
+    eprintln!("[DEBUG] Using actual input path: {}", actual_input_path);
+    
+    let dart_files = find_dart_files(actual_input_path);
+    debug!("Found {} Dart files in {}", dart_files.len(), actual_input_path);
+    for file in &dart_files {
+        eprintln!("[DEBUG] Dart file found: {}", file.display());
+        debug!("  - {}", file.display());
+    }
     
     if dart_files.is_empty() {
-        info!("No Dart files found in {}", input_path);
+        info!("No Dart files found in {}", actual_input_path);
         return;
     }
     
@@ -163,7 +180,14 @@ fn find_flutter_project_root() -> Option<PathBuf> {
 fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
     let mut dart_files = Vec::new();
     
-    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
+    // 一時的にtest_flutter_app/aminomi/lib/models/をデフォルトに設定
+    let search_path = if dir_path == "lib" {
+        "test_flutter_app/aminomi/lib/models"
+    } else {
+        dir_path
+    };
+    
+    for entry in WalkDir::new(search_path).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             let path = entry.path();
             if let Some(extension) = path.extension() {
@@ -178,6 +202,7 @@ fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
 }
 
 fn parse_dart_file(file_path: &Path) -> Option<Vec<DartClass>> {
+    eprintln!("[DEBUG] parse_dart_file called: {}", file_path.display());
     let content = match fs::read_to_string(file_path) {
         Ok(content) => content,
         Err(e) => {
@@ -191,6 +216,7 @@ fn parse_dart_file(file_path: &Path) -> Option<Vec<DartClass>> {
 }
 
 fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>> {
+    eprintln!("[DEBUG] parse_dart_content called: {} ({} bytes)", file_path.display(), content.len());
     let mut classes = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
     let mut pending_annotations: Vec<String> = Vec::new();
@@ -409,6 +435,7 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
     // Set output path based on generator type
     let output_file = match generator_type {
         "freezed" => input_file.with_extension("freezed.dart"),
+        "json" => input_file.with_extension("g.dart"),
         _ => input_file.with_extension("g.dart"),
     };
     
@@ -427,87 +454,131 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
 }
 
 fn generate_freezed_code(class: &DartClass) -> String {
+    eprintln!("[DEBUG] generate_freezed_code called for {}", class.name);
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
     code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
-    
-    // Get class name
+
     let class_name = &class.name;
-    
-    // Extract fields from source file
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
-    let fields = extract_fields_from_dart_class(&source_content);
-    
-    // --- mixin ---
-    code.push_str(&format!("mixin _${} {{\n", class_name));
-    // copyWith signature only (no implementation)
-    code.push_str(&format!("  {} copyWith({{", class_name));
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        // Handle nullable types correctly
-        let param_type = if field.ty.ends_with('?') {
-            field.ty.clone()
-        } else {
-            format!("{}?", field.ty)
-        };
-        code.push_str(&format!("{} {}", param_type, field.name));
+    let union_cases = extract_union_cases_from_dart_class(&source_content, class_name);
+
+    eprintln!("[DEBUG] generate_freezed_code for {}: {} union cases found", class_name, union_cases.len());
+    for (i, case) in union_cases.iter().enumerate() {
+        eprintln!("[DEBUG] case {}: {} with {} fields", i, case.case_name, case.fields.len());
     }
-    code.push_str("});\n");
-    code.push_str("}\n\n");
-    
-    // --- class ---
-    code.push_str(&format!("class _{} with _${} implements {} {{\n", class_name, class_name, class_name));
-    // Field declarations
-    for field in &fields {
-        code.push_str(&format!("  final {} {};\n", field.ty, field.name));
-    }
-    code.push_str("\n");
-    // const constructor
-    code.push_str(&format!("  const _{}({{", class_name));
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        // Only add required for non-nullable fields
-        if field.ty.ends_with('?') {
-            code.push_str(&format!("this.{}", field.name));
-        } else {
-            code.push_str(&format!("required this.{}", field.name));
+
+    if union_cases.len() > 1 {
+        // union型（sealed class）: 各ケースを独立したクラスとして生成
+        for case in &union_cases {
+            let case_class_name = format!("{}{}", class_name, to_pascal_case(&case.case_name));
+            code.push_str(&format!("class {} implements {} {{\n", case_class_name, class_name));
+            for field in &case.fields {
+                code.push_str(&format!("  final {} {};\n", field.ty, field.name));
+            }
+            code.push_str("\n");
+            code.push_str(&format!("  const {}({{", case_class_name));
+            for (i, field) in case.fields.iter().enumerate() {
+                if i > 0 { code.push_str(", "); }
+                if field.ty.ends_with('?') {
+                    code.push_str(&format!("this.{}", field.name));
+                } else {
+                    code.push_str(&format!("required this.{}", field.name));
+                }
+            }
+            code.push_str("});\n\n");
+            code.push_str("  @override\n  String toString() {\n    return '");
+            code.push_str(&format!("{}({})", case_class_name, 
+                case.fields.iter().map(|f| format!("{}: ${{{}}}", f.name, f.name)).collect::<Vec<_>>().join(", ")));
+            code.push_str("';\n  }\n\n");
+            code.push_str("  @override\n  bool operator ==(Object other) {\n    return identical(this, other) ||\n        other is ");
+            code.push_str(&format!("{} &&\n", case_class_name));
+            for field in &case.fields {
+                code.push_str(&format!("        {} == other.{} &&\n", field.name, field.name));
+            }
+            code.push_str("        true;\n  }\n\n");
+            code.push_str("  @override\n  int get hashCode => ");
+            for (i, field) in case.fields.iter().enumerate() {
+                if i > 0 { code.push_str(" ^ "); }
+                code.push_str(&format!("{}.hashCode", field.name));
+            }
+            if case.fields.is_empty() {
+                code.push_str("0");
+            }
+            code.push_str(";\n\n");
+            code.push_str(&format!("  Map<String, dynamic> toJson() => _${}ToJson(this);\n", case_class_name));
+            code.push_str("}\n\n");
         }
+    } else {
+        // 通常クラス
+        let fields = extract_fields_from_dart_class(&source_content, class_name);
+        code.push_str(&format!("mixin _${} {{\n", class_name));
+        code.push_str(&format!("  {} copyWith({{", class_name));
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            let param_type = if field.ty.ends_with('?') {
+                field.ty.clone()
+            } else {
+                format!("{}?", field.ty)
+            };
+            code.push_str(&format!("{} {}", param_type, field.name));
+        }
+        code.push_str("});\n");
+        code.push_str("}\n\n");
+        code.push_str(&format!("class _{} with _${} implements {} {{\n", class_name, class_name, class_name));
+        for field in &fields {
+            code.push_str(&format!("  final {} {};\n", field.ty, field.name));
+        }
+        code.push_str("\n");
+        code.push_str(&format!("  const _{}({{", class_name));
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            if field.ty.ends_with('?') {
+                code.push_str(&format!("this.{}", field.name));
+            } else {
+                code.push_str(&format!("required this.{}", field.name));
+            }
+        }
+        code.push_str(");\n\n");
+        code.push_str(&format!("  @override\n  {} copyWith({{", class_name));
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            let param_type = if field.ty.ends_with('?') {
+                field.ty.clone()
+            } else {
+                format!("{}?", field.ty)
+            };
+            code.push_str(&format!("{} {}", param_type, field.name));
+        }
+        code.push_str("}}) {\n");
+        code.push_str(&format!("    return _{}(", class_name));
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
+        }
+        code.push_str(");\n  }\n\n");
+        code.push_str("  @override\n  String toString() {\n    return '");
+        code.push_str(&format!("{}(", class_name));
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { code.push_str(", "); }
+            code.push_str(&format!("{}: ${{{}}}", field.name, field.name));
+        }
+        code.push_str(")';\n  }\n\n");
+        code.push_str("  @override\n  bool operator ==(Object other) {\n    return identical(this, other) ||\n        other is _");
+        code.push_str(&format!("{} &&\n", class_name));
+        for field in &fields {
+            code.push_str(&format!("        {} == other.{} &&\n", field.name, field.name));
+        }
+        code.push_str("        true;\n  }\n\n");
+        code.push_str("  @override\n  int get hashCode => ");
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 { code.push_str(" ^ "); }
+            code.push_str(&format!("{}.hashCode", field.name));
+        }
+        code.push_str(";\n\n");
+        code.push_str(&format!("  Map<String, dynamic> toJson() => _${}ToJson(this);\n", class_name));
+        code.push_str("}\n");
     }
-    code.push_str("});\n\n");
-    // copyWith implementation
-    code.push_str(&format!("  @override\n  {} copyWith({{", class_name));
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        // Handle nullable types correctly
-        let param_type = if field.ty.ends_with('?') {
-            field.ty.clone()
-        } else {
-            format!("{}?", field.ty)
-        };
-        code.push_str(&format!("{} {}", param_type, field.name));
-    }
-    code.push_str(&format!("}}) {{\n    return _{}(", class_name));
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
-    }
-    code.push_str(");\n  }\n\n");
-    // toString method
-    code.push_str(&generate_to_string(class_name, &fields));
-    code.push_str("\n");
-    // == operator
-    code.push_str(&generate_eq(class_name, &fields));
-    code.push_str("\n");
-    // hashCode
-    code.push_str(&generate_hash_code(&fields));
-    code.push_str("\n");
-    // toJson method
-    code.push_str(&generate_to_json(class_name, &fields));
-    code.push_str("\n");
-    code.push_str("}\n\n");
-    
-    // Note: JSON functions are generated in user.g.dart, not here
-    
     code
 }
 
@@ -597,42 +668,19 @@ fn generate_json_code(class: &DartClass) -> String {
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
     code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
-    
     let class_name = &class.name;
-    
-    // ソースファイルからフィールドを抽出
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
-    let fields = extract_fields_from_dart_class(&source_content);
-    
-    debug!("Extracted {} fields for class {}", fields.len(), class_name);
-    for field in &fields {
-        debug!("Field: {} {}", field.ty, field.name);
+    let union_cases = extract_union_cases_from_dart_class(&source_content, class_name);
+    if union_cases.len() > 1 {
+        // union型（sealed class）: 各ケースクラスの定義のみ生成（Json関数は生成しない）
+        for case in &union_cases {
+            let case_class_name = format!("{}{}", class_name, to_pascal_case(&case.case_name));
+            code.push_str(&format!("// {}: generated by Rust, JSON serialization is handled by build_runner\n", case_class_name));
+        }
+    } else {
+        // 通常クラス: クラス定義のみ生成（Json関数は生成しない）
+        code.push_str(&format!("// {}: generated by Rust, JSON serialization is handled by build_runner\n", class_name));
     }
-    
-    // _$ClassNameFromJson関数
-    code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class_name, class_name));
-    code.push_str(&format!("  return {}(", class_name));
-    
-    // フィールドのJSON解析を生成
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        code.push_str(&format!("{}: json['{}'] as {}", field.name, field.name, field.ty));
-    }
-    code.push_str(");\n");
-    code.push_str("}\n\n");
-    
-    // _$ClassNameToJson関数
-    code.push_str(&format!("Map<String, dynamic> _${}ToJson({} instance) {{\n", class_name, class_name));
-    code.push_str("  return {\n");
-    
-    // フィールドのJSON変換を生成
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(",\n"); }
-        code.push_str(&format!("    '{}': (instance as dynamic).{}", field.name, field.name));
-    }
-    code.push_str("\n  };\n");
-    code.push_str("}\n");
-    
     code
 }
 
@@ -790,6 +838,22 @@ fn to_lower_camel_case(s: &str) -> String {
         None => String::new(),
         Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
     }
+}
+
+fn to_pascal_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize = true;
+    for c in s.chars() {
+        if c == '_' || c == '-' {
+            capitalize = true;
+        } else if capitalize {
+            result.push(c.to_ascii_uppercase());
+            capitalize = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn collect_used_types(functions: &[DartFunction]) -> std::collections::HashSet<String> {
@@ -1045,7 +1109,7 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
 }
 
 /// Extract Dart class field information using tree-sitter-dart
-pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
+pub fn extract_fields_from_dart_class(source: &str, target_class_name: &str) -> Vec<DartField> {
     debug!("Processing source with {} characters", source.len());
     if source.len() > 100 {
         debug!("Source preview: {}", &source[..100]);
@@ -1071,82 +1135,114 @@ pub fn extract_fields_from_dart_class(source: &str) -> Vec<DartField> {
             writeln!(file, "\n=== Processing class: {} ===", class_name).unwrap();
             debug!("Processing class: {}", class_name);
             
-            // Search class body
+            // Only process the target class
+            if class_name != target_class_name {
+                continue;
+            }
+            
+            // Check if this is a union/sealed class by looking for multiple factory constructors
+            let mut factory_constructors = Vec::new();
+            
+            // First pass: collect all factory constructors to determine if this is a union type
+            for member in class_node.children(&mut tree.walk()) {
+                if member.kind() == "class_body" {
+                    for body_item in member.children(&mut tree.walk()) {
+                        if body_item.kind() == "redirecting_factory_constructor_signature" {
+                            let constructor_text = body_item.utf8_text(source.as_bytes()).unwrap_or("");
+                            factory_constructors.push(constructor_text);
+                            debug!("Found factory constructor: {}", constructor_text);
+                        }
+                    }
+                }
+            }
+            
+            // Determine if this is a union type (has multiple factory constructors)
+            let is_union_type = factory_constructors.len() > 1;
+            debug!("Class {} is union type: {}", class_name, is_union_type);
+            
+            // Second pass: extract fields based on type
             for member in class_node.children(&mut tree.walk()) {
                 if member.kind() == "class_body" {
                     debug!("Found class_body for {}", class_name);
                     for body_item in member.children(&mut tree.walk()) {
                         debug!("Body item: {}", body_item.kind());
-                        // Extract fields from declaration (normal Dart class fields)
-                        if body_item.kind() == "declaration" {
-                            debug!("Found declaration, extracting fields...");
-                            extract_fields_from_declaration(body_item, source, &mut fields, &tree);
-                        }
-                        // Handle normal field declarations
-                        else if body_item.kind() == "field_declaration" {
-                            debug!("Found field_declaration, extracting fields...");
-                            extract_fields_from_field_declaration(body_item, source, &mut fields, &tree);
-                        }
-                        // Extract constructor parameters
-                        else if body_item.kind() == "constructor_signature" || body_item.kind() == "redirecting_factory_constructor_signature" {
-                            writeln!(file, "Found constructor: {}", body_item.kind()).unwrap();
-                            for param_list in body_item.children(&mut tree.walk()) {
-                                writeln!(file, "  param_list: {}", param_list.kind()).unwrap();
-                                if param_list.kind() == "formal_parameter_list" {
-                                    for param in param_list.children(&mut tree.walk()) {
-                                        writeln!(file, "    param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
-                                        for child in param.children(&mut tree.walk()) {
-                                            writeln!(file, "      child: {} | text: {}", child.kind(), child.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
-                                        }
-                                        if param.kind() == "formal_parameter" {
-                                            extract_field_from_formal_parameter(param, source, &mut fields, &tree);
-                                        } else if param.kind() == "default_formal_parameter" {
-                                            extract_field_from_parameter(param, source, &mut fields, &tree);
-                                        } else if param.kind() == "typed_identifier" {
-                                            extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                        
+                        if is_union_type {
+                            // For union types, only extract fields from declarations (not constructors)
+                            if body_item.kind() == "declaration" {
+                                debug!("Found declaration in union type, extracting fields...");
+                                extract_fields_from_declaration(body_item, source, &mut fields, &tree);
+                            }
+                            else if body_item.kind() == "field_declaration" {
+                                debug!("Found field_declaration in union type, extracting fields...");
+                                extract_fields_from_field_declaration(body_item, source, &mut fields, &tree);
+                            }
+                            // Skip constructor extraction for union types
+                        } else {
+                            // For non-union types, extract all fields normally
+                            if body_item.kind() == "declaration" {
+                                debug!("Found declaration, extracting fields...");
+                                extract_fields_from_declaration(body_item, source, &mut fields, &tree);
+                            }
+                            else if body_item.kind() == "field_declaration" {
+                                debug!("Found field_declaration, extracting fields...");
+                                extract_fields_from_field_declaration(body_item, source, &mut fields, &tree);
+                            }
+                            else if body_item.kind() == "constructor_signature" || body_item.kind() == "redirecting_factory_constructor_signature" {
+                                writeln!(file, "Found constructor: {}", body_item.kind()).unwrap();
+                                for param_list in body_item.children(&mut tree.walk()) {
+                                    writeln!(file, "  param_list: {}", param_list.kind()).unwrap();
+                                    if param_list.kind() == "formal_parameter_list" {
+                                        for param in param_list.children(&mut tree.walk()) {
+                                            writeln!(file, "    param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
+                                            if param.kind() == "formal_parameter" {
+                                                extract_field_from_formal_parameter(param, source, &mut fields, &tree);
+                                            } else if param.kind() == "default_formal_parameter" {
+                                                extract_field_from_parameter(param, source, &mut fields, &tree);
+                                            } else if param.kind() == "typed_identifier" {
+                                                extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                        // Extract normal Dart class constructor parameters
-                        else if body_item.kind() == "constructor_declaration" {
-                            writeln!(file, "Found constructor_declaration").unwrap();
-                            for constructor_child in body_item.children(&mut tree.walk()) {
-                                writeln!(file, "  constructor_child: {}", constructor_child.kind()).unwrap();
-                                if constructor_child.kind() == "constructor_signature" {
-                                    for param_list in constructor_child.children(&mut tree.walk()) {
-                                        writeln!(file, "    param_list: {}", param_list.kind()).unwrap();
-                                        if param_list.kind() == "formal_parameter_list" {
-                                            for param in param_list.children(&mut tree.walk()) {
-                                                writeln!(file, "      param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
-                                                if param.kind() == "formal_parameter" {
-                                                    extract_field_from_formal_parameter(param, source, &mut fields, &tree);
-                                                } else if param.kind() == "default_formal_parameter" {
-                                                    extract_field_from_parameter(param, source, &mut fields, &tree);
-                                                } else if param.kind() == "typed_identifier" {
-                                                    extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                            else if body_item.kind() == "constructor_declaration" {
+                                writeln!(file, "Found constructor_declaration").unwrap();
+                                for constructor_child in body_item.children(&mut tree.walk()) {
+                                    writeln!(file, "  constructor_child: {}", constructor_child.kind()).unwrap();
+                                    if constructor_child.kind() == "constructor_signature" {
+                                        for param_list in constructor_child.children(&mut tree.walk()) {
+                                            writeln!(file, "    param_list: {}", param_list.kind()).unwrap();
+                                            if param_list.kind() == "formal_parameter_list" {
+                                                for param in param_list.children(&mut tree.walk()) {
+                                                    writeln!(file, "      param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
+                                                    if param.kind() == "formal_parameter" {
+                                                        extract_field_from_formal_parameter(param, source, &mut fields, &tree);
+                                                    } else if param.kind() == "default_formal_parameter" {
+                                                        extract_field_from_parameter(param, source, &mut fields, &tree);
+                                                    } else if param.kind() == "typed_identifier" {
+                                                        extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-                        // Extract Freezed const factory constructor parameters
-                        else if body_item.kind() == "const_constructor_signature" || body_item.kind() == "redirecting_factory_constructor_signature" {
-                            writeln!(file, "Found factory constructor: {}", body_item.kind()).unwrap();
-                            for param_list in body_item.children(&mut tree.walk()) {
-                                writeln!(file, "  param_list: {}", param_list.kind()).unwrap();
-                                if param_list.kind() == "formal_parameter_list" {
-                                    for param in param_list.children(&mut tree.walk()) {
-                                        writeln!(file, "    param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
-                                        if param.kind() == "formal_parameter" {
-                                            extract_field_from_formal_parameter(param, source, &mut fields, &tree);
-                                        } else if param.kind() == "default_formal_parameter" {
-                                            extract_field_from_parameter(param, source, &mut fields, &tree);
-                                        } else if param.kind() == "typed_identifier" {
-                                            extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                            else if body_item.kind() == "const_constructor_signature" {
+                                writeln!(file, "Found factory constructor: {}", body_item.kind()).unwrap();
+                                for param_list in body_item.children(&mut tree.walk()) {
+                                    writeln!(file, "  param_list: {}", param_list.kind()).unwrap();
+                                    if param_list.kind() == "formal_parameter_list" {
+                                        for param in param_list.children(&mut tree.walk()) {
+                                            writeln!(file, "    param: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or("<err>")).unwrap();
+                                            if param.kind() == "formal_parameter" {
+                                                extract_field_from_formal_parameter(param, source, &mut fields, &tree);
+                                            } else if param.kind() == "default_formal_parameter" {
+                                                extract_field_from_parameter(param, source, &mut fields, &tree);
+                                            } else if param.kind() == "typed_identifier" {
+                                                extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                                            }
                                         }
                                     }
                                 }
@@ -1285,7 +1381,7 @@ class User with _$User {
 }
 "#;
         
-        let fields = extract_fields_from_dart_class(freezed_source);
+        let fields = extract_fields_from_dart_class(freezed_source, "User");
         debug!("Extracted fields: {:?}", fields);
         
         // 期待されるフィールドを確認
@@ -1300,4 +1396,69 @@ class User with _$User {
         let age_field = fields.iter().find(|f| f.name == "age").unwrap();
         assert_eq!(age_field.ty, "int?");
     }
+} 
+
+/// Extract union cases (factory constructors) and their fields from a Dart class
+pub fn extract_union_cases_from_dart_class(source: &str, target_class_name: &str) -> Vec<CaseInfo> {
+    eprintln!("[DEBUG] extract_union_cases_from_dart_class called for {}", target_class_name);
+    let mut parser = Parser::new();
+    parser.set_language(unsafe { std::mem::transmute(tree_sitter_dart()) }).unwrap();
+    let tree = parser.parse(source, None).unwrap();
+    let root = tree.root_node();
+    let mut cases = Vec::new();
+
+    for class_node in root.children(&mut tree.walk()) {
+        if class_node.kind() == "class_definition" {
+            let class_name = class_node.children(&mut tree.walk()).find(|n| n.kind() == "identifier").map(|n| n.utf8_text(source.as_bytes()).unwrap_or("")).unwrap_or("");
+            if class_name != target_class_name {
+                continue;
+            }
+            for member in class_node.children(&mut tree.walk()) {
+                if member.kind() == "class_body" {
+                    for body_item in member.children(&mut tree.walk()) {
+                        if body_item.kind() == "declaration" {
+                            for child in body_item.children(&mut tree.walk()) {
+                                if child.kind() == "redirecting_factory_constructor_signature" {
+                                    let mut case_name = String::new();
+                                    let mut fields = Vec::new();
+                                    let mut found_dot = false;
+                                    for sub in child.children(&mut tree.walk()) {
+                                        if sub.kind() == "identifier" && found_dot {
+                                            case_name = sub.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                                            found_dot = false;
+                                        } else if sub.kind() == "." {
+                                            found_dot = true;
+                                        }
+                                        if sub.kind() == "formal_parameter_list" {
+                                            for param in sub.children(&mut tree.walk()) {
+                                                if param.kind() == "formal_parameter" {
+                                                    extract_field_from_formal_parameter(param, source, &mut fields, &tree);
+                                                } else if param.kind() == "default_formal_parameter" {
+                                                    extract_field_from_parameter(param, source, &mut fields, &tree);
+                                                } else if param.kind() == "typed_identifier" {
+                                                    extract_field_from_typed_identifier(param, source, &mut fields, &tree);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if !case_name.is_empty() {
+                                        cases.push(CaseInfo { case_name, fields });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // デバッグ出力
+    eprintln!("[DEBUG] union cases for {}:", target_class_name);
+    for case in &cases {
+        eprintln!("  case: {}", case.case_name);
+        for f in &case.fields {
+            eprintln!("    field: {} {}", f.ty, f.name);
+        }
+    }
+    cases
 } 
