@@ -43,6 +43,8 @@ enum Commands {
     Assets,
     /// Generate everything (code and assets)
     All,
+    /// Clean generated files
+    Clean,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -71,10 +73,20 @@ fn main() {
     match &cli.command {
         Some(Commands::Generate { r#type }) => {
             match r#type {
-                GenType::Freezed => generate::generate_freezed_with_paths(&effective.input, &effective.output),
-                GenType::Json => generate::generate_json_with_paths(&effective.input, &effective.output),
+                GenType::Freezed => {
+                    println!("Freezed generation is disabled. Use 'dart run build_runner build' instead.");
+                    println!("This tool is specialized for Riverpod generation.");
+                },
+                GenType::Json => {
+                    println!("JSON generation is disabled. Use 'dart run build_runner build' instead.");
+                    println!("This tool is specialized for Riverpod generation.");
+                },
                 GenType::Riverpod => generate::generate_riverpod_with_paths(&effective.input, &effective.output),
-                GenType::All => run_generators(&effective),
+                GenType::All => {
+                    println!("Freezed and JSON generation are disabled. Use 'dart run build_runner build' instead.");
+                    println!("This tool is specialized for Riverpod generation.");
+                    generate::generate_riverpod_with_paths(&effective.input, &effective.output);
+                },
             }
         }
         Some(Commands::Assets) => {
@@ -82,6 +94,9 @@ fn main() {
         }
         Some(Commands::All) => {
             run_generators(&effective);
+        }
+        Some(Commands::Clean) => {
+            clean_generated_files(&effective);
         }
         None => {
             // If --watch is specified, run in watch mode
@@ -140,13 +155,8 @@ fn run_generators(cfg: &EffectiveConfig) {
         (yaml::GenerateConfig::default(), yaml::AssetsConfig::default())
     };
     
-    // Use configuration to determine which generators to run
-    if yaml_gen.freezed.unwrap_or(true) {
-        generate::generate_freezed_with_paths(&cfg.input, &cfg.output);
-    }
-    if yaml_gen.json.unwrap_or(true) {
-        generate::generate_json_with_paths(&cfg.input, &cfg.output);
-    }
+    // This tool is specialized for Riverpod generation
+    // Freezed and JSON generation should use 'dart run build_runner build'
     if yaml_gen.riverpod.unwrap_or(true) {
         generate::generate_riverpod_with_paths(&cfg.input, &cfg.output);
     }
@@ -186,6 +196,44 @@ fn watch_mode(cfg: &EffectiveConfig) {
             Err(e) => println!("channel error: {:?}", e),
         }
     }
+}
+
+/// Clean generated files
+fn clean_generated_files(cfg: &EffectiveConfig) {
+    use std::fs;
+    use walkdir::WalkDir;
+    
+    println!("Cleaning generated files in {}...", cfg.input);
+    
+    let mut cleaned_count = 0;
+    
+    // Walk through the input directory and find generated files
+    for entry in WalkDir::new(&cfg.input).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if let Some(file_name) = path.file_name() {
+                let file_name_str = file_name.to_string_lossy();
+                
+                // Check if it's a generated file
+                if file_name_str.ends_with(".g.dart") || 
+                   file_name_str.ends_with(".freezed.dart") ||
+                   file_name_str.ends_with(".config.dart") {
+                    
+                    match fs::remove_file(path) {
+                        Ok(_) => {
+                            println!("Removed: {}", path.display());
+                            cleaned_count += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to remove {}: {}", path.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    println!("Cleaned {} generated files", cleaned_count);
 }
 
 #[cfg(test)]

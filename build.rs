@@ -1,16 +1,16 @@
 use std::path::PathBuf;
 
 fn main() {
-    // tree-sitter-dartのソースディレクトリ
+    // Source directory for tree-sitter-dart
     let tree_sitter_dart_dir = PathBuf::from("tree-sitter-dart");
     
-    // tree-sitter-dartディレクトリが存在しない場合は警告
+    // Warn if tree-sitter-dart directory does not exist
     if !tree_sitter_dart_dir.exists() {
         println!("cargo:warning=tree-sitter-dart directory not found. Please run: git submodule update --init");
         return;
     }
     
-    // tree-sitter-dartのパーサーをビルド
+    // Build the parser for tree-sitter-dart
     let parser_c = tree_sitter_dart_dir.join("src/parser.c");
     let scanner_c = tree_sitter_dart_dir.join("src/scanner.c");
     
@@ -19,8 +19,8 @@ fn main() {
             .file(parser_c)
             .file(scanner_c)
             .include(&tree_sitter_dart_dir.join("src"))
-            .flag_if_supported("-Wno-unused-parameter")  // 未使用パラメータ警告を抑制
-            .flag_if_supported("-Wno-unused-function")   // 未使用関数警告を抑制
+            .flag_if_supported("-Wno-unused-parameter")  // Suppress unused parameter warnings
+            .flag_if_supported("-Wno-unused-function")   // Suppress unused function warnings
             .compile("tree-sitter-dart");
         
         println!("cargo:rerun-if-changed=tree-sitter-dart/src/parser.c");

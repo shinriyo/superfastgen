@@ -1,31 +1,17 @@
 /target
 
-# Generated code files
+# Generated files
 *.g.dart
-debug_ast.txt
+*.freezed.dart
+*.config.dart
 
-# IDE and editor files
+# Configuration files (should be project-specific)
+superfastgen.yaml
+
+# IDE files
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
 
-# Dart/Flutter tool files
-.dart_tool/
-
-# OS generated files
+# OS files
 .DS_Store
-.AppleDouble
-.LSOverride
-._*
-.Spotlight-V100
-.Trashes
-Icon?
-ehthumbs.db
 Thumbs.db
-
-# Test and experimental directories
-test_flutter_app/
-scripts/
-lib/gen/

@@ -422,21 +422,22 @@ fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, f
 
 fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, _output_path: &str) -> Option<GenerationResult> {
     let input_file = &class.file_path;
-    
-    // Set output path based on generator type
+    let parent_dir = input_file.parent()?;
+    let file_stem = input_file.file_stem()?;
     let output_file = match generator_type {
-        "freezed" => input_file.with_extension("freezed.dart"),
-        "json" => input_file.with_extension("g.dart"),
-        _ => input_file.with_extension("g.dart"),
+        "freezed" => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        "json" => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        "riverpod" => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        _ => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
     };
-    
+
     let generated_code = match generator_type {
         "freezed" => generate_freezed_code(class),
         "json" => generate_json_code(class),
         "riverpod" => generate_riverpod_code(class),
         _ => return None,
     };
-    
+
     Some(GenerationResult {
         input_file: input_file.clone(),
         output_file,
@@ -570,6 +571,49 @@ fn generate_freezed_code(class: &DartClass) -> String {
         code.push_str(&format!("  Map<String, dynamic> toJson() => _${}ToJson(this);\n", class_name));
         code.push_str("}\n");
     }
+
+    // Add JSON serialization functions for Freezed classes
+    code.push_str("\n// JSON Serialization Functions\n");
+    if union_cases.len() > 1 {
+        // Union type: Generate JSON functions for each case
+        for case in &union_cases {
+            let case_class_name = format!("{}{}", class_name, to_pascal_case(&case.case_name));
+            code.push_str(&format!("Map<String, dynamic> _${}ToJson({} instance) {{\n", case_class_name, case_class_name));
+            code.push_str("  return {\n");
+            for field in &case.fields {
+                code.push_str(&format!("    '{}': instance.{},\n", field.name, field.name));
+            }
+            code.push_str("  };\n");
+            code.push_str("}\n\n");
+            
+            code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", case_class_name, case_class_name));
+            code.push_str(&format!("  return {}(\n", case_class_name));
+            for field in &case.fields {
+                code.push_str(&format!("    {}: json['{}'] as {},\n", field.name, field.name, field.ty));
+            }
+            code.push_str("  );\n");
+            code.push_str("}\n\n");
+        }
+    } else {
+        // Regular class: Generate JSON functions
+        let fields = extract_fields_from_dart_class(&source_content, class_name);
+        code.push_str(&format!("Map<String, dynamic> _${}ToJson({} instance) {{\n", class_name, class_name));
+        code.push_str("  return {\n");
+        for field in &fields {
+            code.push_str(&format!("    '{}': instance.{},\n", field.name, field.name));
+        }
+        code.push_str("  };\n");
+        code.push_str("}\n\n");
+        
+        code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class_name, class_name));
+        code.push_str(&format!("  return {}(\n", class_name));
+        for field in &fields {
+            code.push_str(&format!("    {}: json['{}'] as {},\n", field.name, field.name, field.ty));
+        }
+        code.push_str("  );\n");
+        code.push_str("}\n");
+    }
+    
     code
 }
 
@@ -678,7 +722,11 @@ fn generate_json_code(class: &DartClass) -> String {
 fn generate_riverpod_code(class: &DartClass) -> String {
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
-    
+    // part of: ファイル名のみ
+    if let Some(file_name) = class.file_path.file_name() {
+        code.push_str(&format!("part of '{}';\n\n", file_name.to_string_lossy()));
+    }
+
     // Extract function and class information from source file
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
     let functions = extract_functions_from_dart_source(&source_content, &class.file_path);
@@ -687,8 +735,6 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     for function in &functions {
         debug!("Function: {} with annotations: {:?}", function.name, function.annotations);
     }
-    
-    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     
     // Generate providers from functions with @riverpod annotation
     for function in &functions {
