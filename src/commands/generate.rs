@@ -32,6 +32,7 @@ struct GenerationResult {
 pub struct DartField {
     pub name: String,
     pub ty: String,
+    pub is_named: bool, // 追加
 }
 
 #[derive(Debug, Clone)]
@@ -264,7 +265,7 @@ fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str,
                 } else {
                     ty.clone()
                 };
-                fields.push(DartField { name: name.clone(), ty: final_type.clone() });
+                fields.push(DartField { name: name.clone(), ty: final_type.clone(), is_named: false });
                 debug!("Added field: {} {}", final_type, name);
             }
         }
@@ -316,7 +317,7 @@ fn extract_field_from_parameter(param: tree_sitter::Node, source: &str, fields: 
     }
     
     if !name.is_empty() && !ty.is_empty() {
-        fields.push(DartField { name, ty });
+        fields.push(DartField { name, ty, is_named: false });
     }
 }
 
@@ -333,7 +334,7 @@ fn extract_field_from_typed_identifier(typed_id: tree_sitter::Node, source: &str
     }
     
     if !name.is_empty() && !ty.is_empty() {
-        fields.push(DartField { name, ty });
+        fields.push(DartField { name, ty, is_named: false });
     }
 }
 
@@ -396,7 +397,7 @@ fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, f
         
         debug!("Extracted field: {} {} (final: {})", ty, name, final_type);
         if !fields.iter().any(|f| f.name == name) {
-            fields.push(DartField { name, ty: final_type });
+            fields.push(DartField { name, ty: final_type, is_named: false });
             debug!("Added field to list");
         }
     }
@@ -638,7 +639,6 @@ fn generate_json_code(class: &DartClass) -> String {
 fn generate_riverpod_code(class: &DartClass) -> String {
     let mut code = String::new();
     code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
-    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     
     // Extract function and class information from source file
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
@@ -648,6 +648,8 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     for function in &functions {
         debug!("Function: {} with annotations: {:?}", function.name, function.annotations);
     }
+    
+    code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     
     // Generate providers from functions with @riverpod annotation
     for function in &functions {
@@ -664,28 +666,6 @@ fn generate_riverpod_code(class: &DartClass) -> String {
         code.push_str(&generate_notifier_provider(class));
     }
     
-    // Temporary: Only process provider.dart to debug function detection
-    if class.file_path.file_name().unwrap().to_string_lossy() == "provider.dart" {
-        debug!("Processing provider.dart - checking all node types");
-        let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
-        let mut parser = Parser::new();
-        parser.set_language(unsafe { std::mem::transmute(tree_sitter_dart()) }).unwrap();
-        let tree = parser.parse(&source_content, None).unwrap();
-        let root = tree.root_node();
-        
-        fn debug_node_types(node: tree_sitter::Node, source: &str, depth: usize) {
-            let indent = "  ".repeat(depth);
-            let node_text = node.utf8_text(source.as_bytes()).unwrap_or_default();
-            debug!("{}Node: {} = '{}'", indent, node.kind(), node_text);
-            
-            for child in node.children(&mut node.walk()) {
-                debug_node_types(child, source, depth + 1);
-            }
-        }
-        
-        debug_node_types(root, &source_content, 0);
-    }
-    
     code
 }
 
@@ -695,48 +675,93 @@ fn generate_function_provider(function: &DartFunction) -> String {
     // Generate provider name from function name
     let provider_name = format!("{}Provider", function.name);
     
-    // Determine appropriate provider type
-    let provider_type = if function.return_type.starts_with("Future<") {
-        "AutoDisposeFutureProvider"
+    debug!("Generating provider for function: {} with return_type: '{}'", function.name, function.return_type);
+    
+    // Determine appropriate provider type and extract the actual return type
+    let (provider_type, actual_return_type) = if function.return_type.starts_with("Future<") {
+        ("AutoDisposeFutureProvider", function.return_type.trim_start_matches("Future<").trim_end_matches(">").to_string())
     } else if function.return_type.starts_with("Stream<") {
-        "AutoDisposeStreamProvider"
+        ("AutoDisposeStreamProvider", function.return_type.trim_start_matches("Stream<").trim_end_matches(">").to_string())
     } else {
-        "AutoDisposeProvider"
+        ("AutoDisposeProvider", function.return_type.clone())
     };
     
     // Check for family support (whether parameters exist beyond Ref)
     let has_family_parameters = function.parameters.iter()
         .any(|p| p.name != "ref" && p.ty != "Ref");
     
+    debug!("Function {}: has_family_parameters = {}", function.name, has_family_parameters);
+    
     if has_family_parameters {
-        // Family provider
+        debug!("Generating family provider for function: {}", function.name);
         let family_params: Vec<_> = function.parameters.iter()
             .filter(|p| p.name != "ref" && p.ty != "Ref")
             .collect();
         
-        let param_types = if family_params.len() == 1 {
-            family_params[0].ty.clone()
+        debug!("Family params: {:?}", family_params);
+        
+        // For Future providers, we need to use the inner type for the provider
+        let return_type = if function.return_type.starts_with("Future<") {
+            let inner = &function.return_type[7..function.return_type.len()-1];
+            inner.to_string()
         } else {
-            let types = family_params.iter()
-                .map(|p| p.ty.clone())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({})", types)
+            function.return_type.clone()
         };
         
+        // Use the correct provider type for family providers too
+        let family_provider_type = if function.return_type.starts_with("Future<") {
+            "AutoDisposeFutureProvider"
+        } else if function.return_type.starts_with("Stream<") {
+            "AutoDisposeStreamProvider"
+        } else {
+            "AutoDisposeProvider"
+        };
+        
+        debug!("Function {}: original return_type = '{}', family_provider_type = '{}'", function.name, function.return_type, family_provider_type);
+        
+        // Generate parameter type - avoid tuples for multiple parameters
+        let param_types: Vec<_> = family_params.iter().map(|p| p.ty.clone()).collect();
+        let param_type = if param_types.len() == 1 {
+            param_types[0].clone()
+        } else {
+            // For multiple parameters, use Map<String, dynamic>
+            "Map<String, dynamic>".to_string()
+        };
+        
+        debug!("Family generation - return_type: '{}', param_type: '{}'", return_type, param_type);
+        
+        // Debug: Print the exact format string being generated
+        let format_str = format!("final {} = {}.family<{}, {}>((ref, params) {{\n", 
+            provider_name, family_provider_type, return_type, param_type);
+        debug!("Generated format string: '{}'", format_str);
+        
         code.push_str(&format!("final {} = {}.family<{}, {}>((ref, params) {{\n", 
-            provider_name, provider_type, function.return_type, param_types
+            provider_name, family_provider_type, return_type, param_type
         ));
         code.push_str(&format!("  return {}(ref", function.name));
+        
+        // Argument passing for family providers
+        let mut positional_i = 0;
+        let positional_count = family_params.iter().filter(|p| !p.is_named).count();
         for param in family_params {
-            code.push_str(&format!(", params.{}", param.name));
+            if param.is_named {
+                code.push_str(&format!(", {}: params['{}']", param.name, param.name));
+            } else {
+                if positional_count == 1 {
+                    code.push_str(", params");
+                    break; // Only one positional param, so break after adding
+                } else {
+                    code.push_str(&format!(", params[{}]", positional_i));
+                    positional_i += 1;
+                }
+            }
         }
         code.push_str(");\n");
         code.push_str("});\n");
     } else {
         // Regular provider
         code.push_str(&format!("final {} = {}<{}>((ref) {{\n", 
-            provider_name, provider_type, function.return_type
+            provider_name, provider_type, actual_return_type
         ));
         code.push_str(&format!("  return {}(ref);\n", function.name));
         code.push_str("});\n");
@@ -765,6 +790,38 @@ fn to_lower_camel_case(s: &str) -> String {
         None => String::new(),
         Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
     }
+}
+
+fn collect_used_types(functions: &[DartFunction]) -> std::collections::HashSet<String> {
+    let mut types = std::collections::HashSet::new();
+    
+    for function in functions {
+        // Add return type
+        if function.return_type.contains("List<") {
+            types.insert("List".to_string());
+        }
+        if function.return_type.contains("Map<") {
+            types.insert("Map".to_string());
+        }
+        if function.return_type.contains("Set<") {
+            types.insert("Set".to_string());
+        }
+        
+        // Add parameter types
+        for param in &function.parameters {
+            if param.ty.contains("List<") {
+                types.insert("List".to_string());
+            }
+            if param.ty.contains("Map<") {
+                types.insert("Map".to_string());
+            }
+            if param.ty.contains("Set<") {
+                types.insert("Set".to_string());
+            }
+        }
+    }
+    
+    types
 }
 
 /// Output AST to file for debugging
@@ -864,24 +921,59 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                             debug!("Extracted complex type: {}", return_type);
                         }
                     }
+                } else if function_text.contains("List<") {
+                    // Extract the full List<Type> pattern
+                    if let Some(start) = function_text.find("List<") {
+                        if let Some(end) = function_text[start..].find('>') {
+                            let full_type = &function_text[start..start + end + 1];
+                            return_type = full_type.to_string();
+                            debug!("Extracted List type: {}", return_type);
+                        }
+                    }
                 }
             }
             
             debug!("Final return type: {}", return_type);
+
+            // Extract the clean return type for provider generation
+            // If the return type is Future<T> or Stream<T>, extract T
+            let clean_return_type = if return_type.starts_with("Future<") || return_type.starts_with("Stream<") {
+                if let Some(start) = return_type.find('<') {
+                    if let Some(end) = return_type.rfind('>') {
+                        return_type[start + 1..end].trim().to_string()
+                    } else {
+                        return_type.clone()
+                    }
+                } else {
+                    return_type.clone()
+                }
+            } else if return_type.starts_with("List<") {
+                if let Some(end) = return_type.find('>') {
+                    return_type[..=end].trim().to_string()
+                } else {
+                    return_type.clone()
+                }
+            } else if let Some(comma_pos) = return_type.find(", (") {
+                return_type[..comma_pos].trim().to_string()
+            } else {
+                return_type.clone()
+            };
+            debug!("Original return_type: '{}', clean_return_type: '{}'", return_type, clean_return_type);
+            // --- ここまで修正 ---
 
             // Extract parameters
             let mut parameters = Vec::new();
             for child in node.children(&mut node.walk()) {
                 if child.kind() == "formal_parameter_list" {
                     for param in child.children(&mut node.walk()) {
+                        debug!("Parameter node: {} | text: {}", param.kind(), param.utf8_text(source.as_bytes()).unwrap_or(""));
+                        
                         if param.kind() == "formal_parameter" {
                             let param_text = param.utf8_text(source.as_bytes()).unwrap_or("");
-                            debug!("Parameter: {}", param_text);
-
-                            // Extract parameter type and name
+                            debug!("Formal parameter: {}", param_text);
                             let mut param_type = "dynamic".to_string();
                             let mut param_name = "param".to_string();
-
+                            let mut is_named = false;
                             for param_child in param.children(&mut node.walk()) {
                                 if param_child.kind() == "type_identifier" {
                                     param_type = param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
@@ -889,16 +981,46 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                                     param_name = param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
                                 }
                             }
-
                             // Detect nullable types
                             if param_text.contains('?') && !param_type.ends_with('?') {
                                 param_type.push('?');
                             }
-
                             parameters.push(DartField {
                                 name: param_name,
                                 ty: param_type,
+                                is_named,
                             });
+                        } else if param.kind() == "optional_formal_parameters" {
+                            debug!("Found optional formal parameters");
+                            // Handle named parameters like {required int page, int limit = 10}
+                            for opt_param in param.children(&mut node.walk()) {
+                                if opt_param.kind() == "formal_parameter" {
+                                    let opt_param_text = opt_param.utf8_text(source.as_bytes()).unwrap_or("");
+                                    debug!("Optional parameter: {}", opt_param_text);
+                                    let mut param_type = "dynamic".to_string();
+                                    let mut param_name = "param".to_string();
+                                    let mut is_named = true;
+                                    for opt_param_child in opt_param.children(&mut node.walk()) {
+                                        match opt_param_child.kind() {
+                                            "type_identifier" => {
+                                                param_type = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
+                                            },
+                                            "identifier" => {
+                                                param_name = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
+                                            },
+                                            _ => {}
+                                        }
+                                    }
+                                    if opt_param_text.contains('?') && !param_type.ends_with('?') {
+                                        param_type.push('?');
+                                    }
+                                    parameters.push(DartField {
+                                        name: param_name,
+                                        ty: param_type,
+                                        is_named,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -906,7 +1028,7 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
 
             functions.push(DartFunction {
                 name: function_name,
-                return_type,
+                return_type: return_type, // Use the original type for provider generation
                 parameters,
                 annotations,
                 file_path: file_path.to_path_buf(),
@@ -1085,7 +1207,7 @@ fn extract_fields_from_field_declaration(field_decl: tree_sitter::Node, source: 
                 } else {
                     ty.clone()
                 };
-                fields.push(DartField { name: name.clone(), ty: final_type.clone() });
+                fields.push(DartField { name: name.clone(), ty: final_type.clone(), is_named: false });
                 debug!("Added field: {} {}", final_type, name);
             }
         }

@@ -11,6 +11,21 @@ Future<String> getUserName(Ref ref) async {
 }
 
 @riverpod
+Future<String> getUserById(Ref ref, String userId) async {
+  // Simulate API call with parameter
+  await Future.delayed(Duration(seconds: 1));
+  return 'User $userId';
+}
+
+@riverpod
+Future<List<String>> getUsersByPage(Ref ref,
+    {required int page, int limit = 10}) async {
+  // Simulate API call with named parameters
+  await Future.delayed(Duration(seconds: 1));
+  return List.generate(limit, (i) => 'User ${page * limit + i}');
+}
+
+@riverpod
 class UserNotifier extends Notifier<String> {
   @override
   String build() {
