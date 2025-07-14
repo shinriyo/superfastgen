@@ -67,6 +67,11 @@ pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
     generate_code_for_annotation_with_paths("@riverpod", "riverpod", input_path, output_path)
 }
 
+pub fn generate_riverpod_with_paths_and_clean(input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
+    info!("Generating Riverpod code from {} to {}...", input_path, output_path);
+    generate_code_for_annotation_with_paths_and_clean("@riverpod", "riverpod", input_path, output_path, delete_conflicting_outputs)
+}
+
 fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
     // Auto-detect Flutter project root
     if let Some(project_root) = find_flutter_project_root() {
@@ -85,7 +90,11 @@ fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
 }
 
 fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &str, input_path: &str, output_path: &str) {
-    eprintln!("[DEBUG] generate_code_for_annotation_with_paths called: annotation={}, generator_type={}, input_path={}, output_path={}", annotation, generator_type, input_path, output_path);
+    generate_code_for_annotation_with_paths_and_clean(annotation, generator_type, input_path, output_path, false)
+}
+
+fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator_type: &str, input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
+    eprintln!("[DEBUG] generate_code_for_annotation_with_paths_and_clean called: annotation={}, generator_type={}, input_path={}, output_path={}, delete_conflicting_outputs={}", annotation, generator_type, input_path, output_path, delete_conflicting_outputs);
     
     eprintln!("[DEBUG] Using input path: {}", input_path);
     
@@ -140,6 +149,14 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
     if let Err(e) = fs::create_dir_all(output_dir) {
         error!("Error creating output directory {}: {}", output_path, e);
         return;
+    }
+    
+    // Delete conflicting outputs if requested
+    if delete_conflicting_outputs {
+        if let Err(e) = clean_output_directory(output_dir) {
+            error!("Error cleaning output directory {}: {}", output_path, e);
+            return;
+        }
     }
     
     // Generate .g.dart files in parallel
@@ -198,6 +215,26 @@ fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
     }
     
     dart_files
+}
+
+fn clean_output_directory(output_dir: &Path) -> Result<(), std::io::Error> {
+    if !output_dir.exists() {
+        return Ok(());
+    }
+    
+    for entry in WalkDir::new(output_dir).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if let Some(extension) = path.extension() {
+                if extension == "g.dart" {
+                    info!("Deleting conflicting output: {}", path.display());
+                    fs::remove_file(path)?;
+                }
+            }
+        }
+    }
+    
+    Ok(())
 }
 
 fn parse_dart_file(file_path: &Path) -> Option<Vec<DartClass>> {

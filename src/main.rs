@@ -30,6 +30,9 @@ struct Cli {
     /// Watch mode for file changes
     #[arg(long)]
     watch: bool,
+    /// Delete conflicting outputs before generation
+    #[arg(long)]
+    delete_conflicting_outputs: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -45,6 +48,9 @@ enum Commands {
         /// Output directory for generated files (overrides global --output)
         #[arg(long)]
         output: Option<String>,
+        /// Delete conflicting outputs before generation
+        #[arg(long)]
+        delete_conflicting_outputs: bool,
     },
     /// Generate only assets
     Assets {
@@ -92,6 +98,7 @@ struct EffectiveConfig {
     output: String,
     assets: String,
     watch: bool,
+    delete_conflicting_outputs: bool,
 }
 
 fn main() {
@@ -102,9 +109,10 @@ fn main() {
     let effective = merge_config(&cli, yaml_config);
 
     match &cli.command {
-        Some(Commands::Generate { r#type, input, output }) => {
+        Some(Commands::Generate { r#type, input, output, delete_conflicting_outputs }) => {
             let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
             let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
+            let effective_delete_conflicting = *delete_conflicting_outputs || effective.delete_conflicting_outputs;
 
             match r#type {
                 GenType::Freezed => {
@@ -115,11 +123,11 @@ fn main() {
                     println!("JSON generation is disabled. Use 'dart run build_runner build' instead.");
                     println!("This tool is specialized for Riverpod generation.");
                 },
-                GenType::Riverpod => generate::generate_riverpod_with_paths(&effective_input, &effective_output),
+                GenType::Riverpod => generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
                 GenType::All => {
                     println!("Freezed and JSON generation are disabled. Use 'dart run build_runner build' instead.");
                     println!("This tool is specialized for Riverpod generation.");
-                    generate::generate_riverpod_with_paths(&effective_input, &effective_output);
+                    generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
                 },
             }
         }
@@ -137,6 +145,7 @@ fn main() {
                 output: effective_output,
                 assets: effective_assets,
                 watch: effective.watch,
+                delete_conflicting_outputs: effective.delete_conflicting_outputs,
             });
         }
         Some(Commands::Clean { input, output }) => {
@@ -147,6 +156,7 @@ fn main() {
                 output: effective_output,
                 assets: effective.assets.clone(),
                 watch: effective.watch,
+                delete_conflicting_outputs: effective.delete_conflicting_outputs,
             });
         }
         None => {
@@ -194,6 +204,8 @@ fn merge_config(cli: &Cli, yaml_config: Option<yaml::SuperfastgenConfig>) -> Eff
         },
         // Watch mode controlled only by CLI --watch flag
         watch: cli.watch,
+        // Delete conflicting outputs flag
+        delete_conflicting_outputs: cli.delete_conflicting_outputs,
     }
 }
 
@@ -209,7 +221,7 @@ fn run_generators(cfg: &EffectiveConfig) {
     // This tool is specialized for Riverpod generation
     // Freezed and JSON generation should use 'dart run build_runner build'
     if yaml_gen.riverpod.unwrap_or(true) {
-        generate::generate_riverpod_with_paths(&cfg.input, &cfg.output);
+        generate::generate_riverpod_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
     }
     
     // Use configuration for assets
