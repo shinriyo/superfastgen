@@ -6,6 +6,7 @@ use tree_sitter::Parser;
 use std::fs::OpenOptions;
 use std::io::Write;
 use log::{info, debug, error};
+use sha1::{Sha1, Digest};
 
 // tree-sitter FFI bindings
 #[link(name = "tree-sitter-dart")]
@@ -781,6 +782,15 @@ fn generate_function_provider(function: &DartFunction) -> String {
     // Generate provider name from function name
     let provider_name = format!("{}Provider", function.name);
     
+    // Generate hash function for the provider
+    let hash_input = format!("{}{}", function.name, function.file_path.display());
+    let mut hasher = Sha1::new();
+    hasher.update(hash_input.as_bytes());
+    let hash_result = hasher.finalize();
+    let hash_string = format!("{:x}", hash_result);
+    
+    code.push_str(&format!("String _${}Hash() => r'{}';\n\n", provider_name, hash_string));
+    
     debug!("Generating provider for function: {} with return_type: '{}'", function.name, function.return_type);
     
     // Determine appropriate provider type and extract the actual return type
@@ -864,6 +874,11 @@ fn generate_function_provider(function: &DartFunction) -> String {
         }
         code.push_str(");\n");
         code.push_str("});\n");
+        code.push_str(&format!("  name: r'{}',\n", provider_name));
+        code.push_str(&format!("  debugGetCreateSourceHash:\n"));
+        code.push_str(&format!("      const bool.fromEnvironment('dart.vm.product') ? null : _${}Hash,\n", provider_name));
+        code.push_str("  dependencies: null,\n");
+        code.push_str("  allTransitiveDependencies: null,\n");
     } else {
         // Regular provider
         code.push_str(&format!("final {} = {}<{}>((ref) {{\n", 
@@ -871,6 +886,11 @@ fn generate_function_provider(function: &DartFunction) -> String {
         ));
         code.push_str(&format!("  return {}(ref);\n", function.name));
         code.push_str("});\n");
+        code.push_str(&format!("  name: r'{}',\n", provider_name));
+        code.push_str(&format!("  debugGetCreateSourceHash:\n"));
+        code.push_str(&format!("      const bool.fromEnvironment('dart.vm.product') ? null : _${}Hash,\n", provider_name));
+        code.push_str("  dependencies: null,\n");
+        code.push_str("  allTransitiveDependencies: null,\n");
     }
     
     code
