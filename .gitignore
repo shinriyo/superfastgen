@@ -16,3 +16,4 @@ superfastgen.yaml
 .DS_Store
 Thumbs.db
 test_flutter_app/
+.dart_tool/
