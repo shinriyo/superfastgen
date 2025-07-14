@@ -153,6 +153,11 @@ fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator
     
     // Delete conflicting outputs if requested
     if delete_conflicting_outputs {
+        // output_dir だけでなく input_path 全体の .g.dart も削除
+        if let Err(e) = clean_output_directory_all_g_dart(Path::new(input_path)) {
+            error!("Error cleaning all .g.dart files in {}: {}", input_path, e);
+            return;
+        }
         if let Err(e) = clean_output_directory(output_dir) {
             error!("Error cleaning output directory {}: {}", output_path, e);
             return;
@@ -218,22 +223,51 @@ fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
 }
 
 fn clean_output_directory(output_dir: &Path) -> Result<(), std::io::Error> {
+    eprintln!("[DEBUG] clean_output_directory called for: {}", output_dir.display());
     if !output_dir.exists() {
+        eprintln!("[DEBUG] Output directory does not exist: {}", output_dir.display());
         return Ok(());
     }
     
+    eprintln!("[DEBUG] Scanning output directory: {}", output_dir.display());
     for entry in WalkDir::new(output_dir).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             let path = entry.path();
-            if let Some(extension) = path.extension() {
-                if extension == "g.dart" {
+            eprintln!("[DEBUG] Found file: {}", path.display());
+            if let Some(file_name) = path.file_name() {
+                let file_name_str = file_name.to_string_lossy();
+                eprintln!("[DEBUG] File name: {}", file_name_str);
+                if file_name_str.ends_with(".g.dart") {
                     info!("Deleting conflicting output: {}", path.display());
                     fs::remove_file(path)?;
+                    eprintln!("[DEBUG] Deleted file: {}", path.display());
                 }
             }
         }
     }
     
+    Ok(())
+}
+
+fn clean_output_directory_all_g_dart(input_path: &Path) -> Result<(), std::io::Error> {
+    eprintln!("[DEBUG] clean_output_directory_all_g_dart called for: {}", input_path.display());
+    if !input_path.exists() {
+        eprintln!("[DEBUG] Input directory does not exist: {}", input_path.display());
+        return Ok(());
+    }
+    for entry in WalkDir::new(input_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            let path = entry.path();
+            if let Some(file_name) = path.file_name() {
+                let file_name_str = file_name.to_string_lossy();
+                if file_name_str.ends_with(".g.dart") {
+                    info!("Deleting conflicting output (all): {}", path.display());
+                    fs::remove_file(path)?;
+                    eprintln!("[DEBUG] Deleted file (all): {}", path.display());
+                }
+            }
+        }
+    }
     Ok(())
 }
 
