@@ -36,15 +36,46 @@ struct Cli {
 enum Commands {
     /// Generate code for a specific type
     Generate {
+        /// Type of code to generate
         #[arg(long, value_enum, default_value = "all")]
         r#type: GenType,
+        /// Input directory for Dart files (overrides global --input)
+        #[arg(long)]
+        input: Option<String>,
+        /// Output directory for generated files (overrides global --output)
+        #[arg(long)]
+        output: Option<String>,
     },
     /// Generate only assets
-    Assets,
+    Assets {
+        /// Assets directory (overrides global --assets)
+        #[arg(long)]
+        assets: Option<String>,
+        /// Output directory for generated files (overrides global --output)
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Generate everything (code and assets)
-    All,
+    All {
+        /// Input directory for Dart files (overrides global --input)
+        #[arg(long)]
+        input: Option<String>,
+        /// Output directory for generated files (overrides global --output)
+        #[arg(long)]
+        output: Option<String>,
+        /// Assets directory (overrides global --assets)
+        #[arg(long)]
+        assets: Option<String>,
+    },
     /// Clean generated files
-    Clean,
+    Clean {
+        /// Input directory to clean (overrides global --input)
+        #[arg(long)]
+        input: Option<String>,
+        /// Output directory to clean (overrides global --output)
+        #[arg(long)]
+        output: Option<String>,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -71,7 +102,10 @@ fn main() {
     let effective = merge_config(&cli, yaml_config);
 
     match &cli.command {
-        Some(Commands::Generate { r#type }) => {
+        Some(Commands::Generate { r#type, input, output }) => {
+            let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
+            let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
+
             match r#type {
                 GenType::Freezed => {
                     println!("Freezed generation is disabled. Use 'dart run build_runner build' instead.");
@@ -81,22 +115,39 @@ fn main() {
                     println!("JSON generation is disabled. Use 'dart run build_runner build' instead.");
                     println!("This tool is specialized for Riverpod generation.");
                 },
-                GenType::Riverpod => generate::generate_riverpod_with_paths(&effective.input, &effective.output),
+                GenType::Riverpod => generate::generate_riverpod_with_paths(&effective_input, &effective_output),
                 GenType::All => {
                     println!("Freezed and JSON generation are disabled. Use 'dart run build_runner build' instead.");
                     println!("This tool is specialized for Riverpod generation.");
-                    generate::generate_riverpod_with_paths(&effective.input, &effective.output);
+                    generate::generate_riverpod_with_paths(&effective_input, &effective_output);
                 },
             }
         }
-        Some(Commands::Assets) => {
-            assets::generate_assets_with_paths(&effective.assets, &effective.output);
+        Some(Commands::Assets { assets, output }) => {
+            let effective_assets = assets.as_ref().cloned().unwrap_or(effective.assets.clone());
+            let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
+            assets::generate_assets_with_paths(&effective_assets, &effective_output);
         }
-        Some(Commands::All) => {
-            run_generators(&effective);
+        Some(Commands::All { input, output, assets }) => {
+            let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
+            let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
+            let effective_assets = assets.as_ref().cloned().unwrap_or(effective.assets.clone());
+            run_generators(&EffectiveConfig {
+                input: effective_input,
+                output: effective_output,
+                assets: effective_assets,
+                watch: effective.watch,
+            });
         }
-        Some(Commands::Clean) => {
-            clean_generated_files(&effective);
+        Some(Commands::Clean { input, output }) => {
+            let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
+            let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
+            clean_generated_files(&EffectiveConfig {
+                input: effective_input,
+                output: effective_output,
+                assets: effective.assets.clone(),
+                watch: effective.watch,
+            });
         }
         None => {
             // If --watch is specified, run in watch mode

@@ -15,3 +15,4 @@ superfastgen.yaml
 # OS files
 .DS_Store
 Thumbs.db
+test_flutter_app/
