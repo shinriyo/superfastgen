@@ -457,7 +457,10 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
 fn generate_freezed_code(class: &DartClass) -> String {
     eprintln!("[DEBUG] generate_freezed_code called for {}", class.name);
     let mut code = String::new();
-    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
+    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
+    code.push_str("// **************************************************************************\n");
+    code.push_str("// FreezedGenerator\n");
+    code.push_str("// **************************************************************************\n\n");
     code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
 
     let class_name = &class.name;
@@ -710,7 +713,10 @@ fn generate_hash_code(fields: &[DartField]) -> String {
 
 fn generate_json_code(class: &DartClass) -> String {
     let mut code = String::new();
-    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
+    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
+    code.push_str("// **************************************************************************\n");
+    code.push_str("// JsonSerializableGenerator\n");
+    code.push_str("// **************************************************************************\n\n");
     code.push_str(&format!("part of '{}';\n\n", class.file_path.file_name().unwrap().to_string_lossy()));
     let class_name = &class.name;
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
@@ -730,8 +736,11 @@ fn generate_json_code(class: &DartClass) -> String {
 
 fn generate_riverpod_code(class: &DartClass) -> String {
     let mut code = String::new();
-    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
-    // part of: ファイル名のみ
+    code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
+    code.push_str("// **************************************************************************\n");
+    code.push_str("// RiverpodGenerator\n");
+    code.push_str("// **************************************************************************\n\n");
+    // part of: filename only
     if let Some(file_name) = class.file_path.file_name() {
         code.push_str(&format!("part of '{}';\n\n", file_name.to_string_lossy()));
     }
