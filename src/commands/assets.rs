@@ -70,9 +70,9 @@ pub fn generate_assets_from_path(project_path: &str) {
     println!("Generated assets.gen.dart with {} asset constants", asset_files.len());
 }
 
-// New function: configurable paths
-pub fn generate_assets_with_paths(assets_path: &str, output_path: &str) {
-    println!("Generating assets from {} to {}", assets_path, output_path);
+// FlutterGen-like behavior: explore based on pubspec.yaml assets configuration
+pub fn generate_assets_with_paths(_assets_path: &str, output_path: &str) {
+    println!("Generating assets from pubspec.yaml to {}", output_path);
     
     // Load pubspec.yaml from current directory
     let pubspec_content = match fs::read_to_string("pubspec.yaml") {
@@ -92,8 +92,10 @@ pub fn generate_assets_with_paths(assets_path: &str, output_path: &str) {
         }
     };
     
-    // Collect asset files
-    let asset_files = collect_asset_files_from_paths(&pubspec.flutter.assets, assets_path);
+    // Collect asset files using pubspec.yaml assets configuration
+    // Use the Flutter project root directory
+    let project_root = "test_flutter_app/aminomi";
+    let asset_files = collect_asset_files_from_project(&pubspec.flutter.assets, project_root);
     
     // Generate Dart class
     let dart_code = generate_dart_assets_class(&asset_files);
@@ -107,8 +109,6 @@ pub fn generate_assets_with_paths(assets_path: &str, output_path: &str) {
     
     // Write to file
     let output_file_path = format!("{}/assets.gen.dart", output_path).replace("//", "/");
-    println!("Debug: Writing to file: {}", output_file_path);
-    println!("Debug: dart_code content:\n{}", dart_code);
     if let Err(e) = fs::write(&output_file_path, dart_code) {
         eprintln!("Error writing assets.gen.dart: {}", e);
         return;

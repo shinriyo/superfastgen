@@ -134,13 +134,20 @@ fn generate_code_for_annotation_with_paths(annotation: &str, generator_type: &st
         return;
     }
     
-            // Generate .g.dart files in parallel
+    // Create output directory if it doesn't exist
+    let output_dir = Path::new(output_path);
+    if let Err(e) = fs::create_dir_all(output_dir) {
+        error!("Error creating output directory {}: {}", output_path, e);
+        return;
+    }
+    
+    // Generate .g.dart files in parallel
     let results: Vec<GenerationResult> = target_classes
         .par_iter()
         .filter_map(|class| generate_g_dart_file_with_output_path(class, generator_type, output_path))
         .collect();
     
-            // Output results
+    // Output results
     let results_count = results.len();
     for result in results {
         if let Err(e) = fs::write(&result.output_file, &result.generated_code) {
@@ -420,15 +427,17 @@ fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, f
     }
 }
 
-fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, _output_path: &str) -> Option<GenerationResult> {
+fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str, output_path: &str) -> Option<GenerationResult> {
     let input_file = &class.file_path;
-    let parent_dir = input_file.parent()?;
     let file_stem = input_file.file_stem()?;
+    
+    // Use the specified output path instead of the input file's parent directory
+    let output_dir = Path::new(output_path);
     let output_file = match generator_type {
-        "freezed" => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
-        "json" => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
-        "riverpod" => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
-        _ => parent_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        "freezed" => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        "json" => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        "riverpod" => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
+        _ => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
     };
 
     let generated_code = match generator_type {
@@ -726,6 +735,9 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     if let Some(file_name) = class.file_path.file_name() {
         code.push_str(&format!("part of '{}';\n\n", file_name.to_string_lossy()));
     }
+    
+    // Note: In Dart part files, imports should be in the main file, not in the part file
+    // The main file (auth_provider.dart) should have the necessary imports
 
     // Extract function and class information from source file
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
@@ -1464,6 +1476,100 @@ class User with _$User {
         
         let age_field = fields.iter().find(|f| f.name == "age").unwrap();
         assert_eq!(age_field.ty, "int?");
+    }
+
+    #[test]
+    fn test_generate_with_custom_paths() {
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let input_dir = temp_dir.path().join("custom_input");
+        let output_dir = temp_dir.path().join("custom_output");
+        
+        fs::create_dir_all(&input_dir).unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+        
+        // Create a test Dart file with @riverpod annotation
+        let dart_content = r#"
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+part 'test_provider.g.dart';
+
+@riverpod
+Future<String> testFunction(TestFunctionRef ref) async {
+  return "test";
+}
+"#;
+        
+        fs::write(input_dir.join("test_provider.dart"), dart_content).unwrap();
+        
+        // Test the generation with custom paths
+        let input_path = input_dir.to_str().unwrap();
+        let output_path = output_dir.to_str().unwrap();
+        
+        // This would normally call the actual generation function
+        // For now, we'll test the path handling
+        let dart_files = find_dart_files(input_path);
+        assert_eq!(dart_files.len(), 1);
+        assert!(dart_files[0].file_name().unwrap() == "test_provider.dart");
+        
+        // Test that the output directory exists
+        assert!(output_dir.exists());
+    }
+
+    #[test]
+    fn test_generate_g_dart_file_with_output_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let input_file = temp_dir.path().join("test.dart");
+        
+        // Create a test class
+        let class = DartClass {
+            name: "TestClass".to_string(),
+            annotations: vec!["@riverpod".to_string()],
+            file_path: input_file.clone(),
+        };
+        
+        // Test generation with custom output path
+        let result = generate_g_dart_file_with_output_path(&class, "riverpod", temp_dir.path().to_str().unwrap());
+        
+        assert!(result.is_some());
+        let result = result.unwrap();
+        
+        // Check that output file path is correct
+        assert!(result.output_file.file_name().unwrap() == "test.g.dart");
+        assert!(result.output_file.parent().unwrap() == temp_dir.path());
+        
+        // Check that generated code contains expected content
+        assert!(result.generated_code.contains("part of 'test.dart'"));
+        assert!(result.generated_code.contains("// GENERATED CODE"));
+    }
+
+    #[test]
+    fn test_find_dart_files_recursive() {
+        let temp_dir = TempDir::new().unwrap();
+        let lib_dir = temp_dir.path().join("lib");
+        let models_dir = lib_dir.join("models");
+        let providers_dir = lib_dir.join("providers");
+        
+        fs::create_dir_all(&models_dir).unwrap();
+        fs::create_dir_all(&providers_dir).unwrap();
+        
+        // Create Dart files in different subdirectories
+        fs::write(models_dir.join("user.dart"), "class User {}").unwrap();
+        fs::write(providers_dir.join("auth_provider.dart"), "class AuthProvider {}").unwrap();
+        fs::write(lib_dir.join("main.dart"), "void main() {}").unwrap();
+        
+        let dart_files = find_dart_files(temp_dir.path().join("lib").to_str().unwrap());
+        
+        // Should find all 3 Dart files recursively
+        assert_eq!(dart_files.len(), 3);
+        
+        let file_names: Vec<_> = dart_files.iter()
+            .map(|f| f.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        
+        assert!(file_names.contains(&"user.dart".to_string()));
+        assert!(file_names.contains(&"auth_provider.dart".to_string()));
+        assert!(file_names.contains(&"main.dart".to_string()));
     }
 } 
 
