@@ -19,10 +19,10 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
     /// Input directory for Dart files
-    #[arg(long, default_value = "lib")]
+    #[arg(long, default_value = "test_flutter_app/aminomi/lib")]
     input: String,
     /// Output directory for generated files
-    #[arg(long, default_value = "lib/gen")]
+    #[arg(long, default_value = "test_flutter_app/aminomi/lib/gen")]
     output: String,
     /// Assets directory
     #[arg(long, default_value = "assets")]
@@ -187,15 +187,15 @@ fn merge_config(cli: &Cli, yaml_config: Option<yaml::SuperfastgenConfig>) -> Eff
     
     EffectiveConfig {
         // Prioritize CLI arguments if they differ from defaults
-        input: if cli.input != "lib" {
+        input: if cli.input != "test_flutter_app/aminomi/lib" {
             cli.input.clone()
         } else {
-            yaml_gen.input.unwrap_or("lib".to_string())
+            yaml_gen.input.unwrap_or("test_flutter_app/aminomi/lib".to_string())
         },
-        output: if cli.output != "lib/gen" {
+        output: if cli.output != "test_flutter_app/aminomi/lib/gen" {
             cli.output.clone()
         } else {
-            yaml_gen.output.unwrap_or("lib/gen".to_string())
+            yaml_gen.output.unwrap_or("test_flutter_app/aminomi/lib/gen".to_string())
         },
         assets: if cli.assets != "assets" {
             cli.assets.clone()
@@ -305,8 +305,8 @@ mod tests {
     #[test]
     fn test_run_generators() {
         let cfg = EffectiveConfig {
-            input: "lib".to_string(),
-            output: "lib/gen".to_string(),
+            input: "test_flutter_app/aminomi/lib".to_string(),
+            output: "test_flutter_app/aminomi/lib/gen".to_string(),
             assets: "assets".to_string(),
             watch: false,
         };

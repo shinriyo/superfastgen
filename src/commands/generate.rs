@@ -205,7 +205,100 @@ fn find_flutter_project_root() -> Option<PathBuf> {
     None
 }
 
+fn find_project_root_from_file(file_path: &Path) -> PathBuf {
+    // Find the project root by looking for pubspec.yaml
+    let mut dir = file_path.parent().unwrap_or_else(|| Path::new(""));
+    
+    loop {
+        if dir.join("pubspec.yaml").exists() {
+            return dir.to_path_buf();
+        }
+        
+        if let Some(parent) = dir.parent() {
+            dir = parent;
+        } else {
+            break;
+        }
+    }
+    
+    // If no pubspec.yaml found, use the current working directory
+    std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf())
+}
+
+fn update_part_directive_in_file(input_file: &Path, output_file: &Path) {
+    let content = match fs::read_to_string(input_file) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("[DEBUG] Failed to read input file {}: {}", input_file.display(), e);
+            return;
+        }
+    };
+    
+    // Calculate relative path from input file to output file
+    let input_dir = input_file.parent().unwrap_or_else(|| Path::new(""));
+    let output_dir = output_file.parent().unwrap_or_else(|| Path::new(""));
+    let output_filename = output_file.file_name().unwrap_or_else(|| std::ffi::OsStr::new(""));
+    
+    let relative_path = if input_dir == output_dir {
+        output_filename.to_string_lossy().to_string()
+    } else {
+        // Calculate relative path from input to output
+        let mut relative = String::new();
+        let mut input_parts: Vec<_> = input_dir.components().collect();
+        let mut output_parts: Vec<_> = output_dir.components().collect();
+        
+        // Find common prefix
+        let mut common_len = 0;
+        for (a, b) in input_parts.iter().zip(output_parts.iter()) {
+            if a == b {
+                common_len += 1;
+            } else {
+                break;
+            }
+        }
+        
+        // Add ".." for each level up from input to common ancestor
+        for _ in 0..(input_parts.len() - common_len) {
+            if !relative.is_empty() {
+                relative.push('/');
+            }
+            relative.push_str("..");
+        }
+        
+        // Add path from common ancestor to output file
+        for part in output_parts.iter().skip(common_len) {
+            if !relative.is_empty() {
+                relative.push('/');
+            }
+            relative.push_str(&part.as_os_str().to_string_lossy());
+        }
+        
+        // Add filename
+        if !relative.is_empty() {
+            relative.push('/');
+        }
+        relative.push_str(&output_filename.to_string_lossy());
+        
+        relative
+    };
+    
+    // Replace the part directive
+    let old_part = format!("part '{}';", output_filename.to_string_lossy());
+    let new_part = format!("part '{}';", relative_path);
+    
+    let updated_content = content.replace(&old_part, &new_part);
+    
+    if updated_content != content {
+        if let Err(e) = fs::write(input_file, updated_content) {
+            eprintln!("[DEBUG] Failed to update part directive in {}: {}", input_file.display(), e);
+        } else {
+            eprintln!("[DEBUG] Updated part directive in {}: {} -> {}", input_file.display(), old_part, new_part);
+        }
+    }
+}
+
 fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
+    eprintln!("[DEBUG] find_dart_files called with dir_path: {}", dir_path);
     let mut dart_files = Vec::new();
     
     for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
@@ -213,12 +306,14 @@ fn find_dart_files(dir_path: &str) -> Vec<PathBuf> {
             let path = entry.path();
             if let Some(extension) = path.extension() {
                 if extension == "dart" {
+                    eprintln!("[DEBUG] Found Dart file: {}", path.display());
                     dart_files.push(path.to_path_buf());
                 }
             }
         }
     }
     
+    eprintln!("[DEBUG] find_dart_files returning {} files", dart_files.len());
     dart_files
 }
 
@@ -332,8 +427,11 @@ fn extract_fields_from_declaration(declaration: tree_sitter::Node, source: &str,
     for child in declaration.children(&mut tree.walk()) {
         debug!("Declaration child: {}", child.kind());
         if child.kind() == "type_identifier" {
-            field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
-            debug!("Found type: {}", field_type.as_ref().unwrap());
+            let type_text = child.utf8_text(source.as_bytes()).unwrap().trim().to_string();
+            if !type_text.is_empty() {
+                field_type = Some(type_text);
+                debug!("Found type: {}", field_type.as_ref().unwrap());
+            }
         } else if child.kind() == "initialized_identifier_list" {
             // Extract field names from initialized_identifier_list
             for identifier in child.children(&mut tree.walk()) {
@@ -403,9 +501,9 @@ fn extract_field_from_parameter(param: tree_sitter::Node, source: &str, fields: 
     for child in param.children(&mut tree.walk()) {
         if child.kind() == "typed_identifier" {
             for t in child.children(&mut tree.walk()) {
-                if t.kind() == "type_identifier" {
-                    ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
-                } else if t.kind() == "identifier" {
+                                        if t.kind() == "type_identifier" {
+                            ty = t.utf8_text(source.as_bytes()).unwrap().trim().to_string();
+                        } else if t.kind() == "identifier" {
                     name = t.utf8_text(source.as_bytes()).unwrap().to_string();
                 }
             }
@@ -423,7 +521,7 @@ fn extract_field_from_typed_identifier(typed_id: tree_sitter::Node, source: &str
     
     for t in typed_id.children(&mut tree.walk()) {
         if t.kind() == "type_identifier" {
-            ty = t.utf8_text(source.as_bytes()).unwrap().to_string();
+            ty = t.utf8_text(source.as_bytes()).unwrap().trim().to_string();
         } else if t.kind() == "identifier" {
             name = t.utf8_text(source.as_bytes()).unwrap().to_string();
         }
@@ -449,8 +547,11 @@ fn extract_field_from_formal_parameter(param: tree_sitter::Node, source: &str, f
         for child in node.children(&mut node.walk()) {
             match child.kind() {
                 "type_identifier" => {
-                    field_type = Some(child.utf8_text(source.as_bytes()).unwrap().to_string());
-                    debug!("Found type: {}", field_type.as_ref().unwrap());
+                    let type_text = child.utf8_text(source.as_bytes()).unwrap().trim().to_string();
+                    if !type_text.is_empty() {
+                        field_type = Some(type_text);
+                        debug!("Found type: {}", field_type.as_ref().unwrap());
+                    }
                 },
                 "nullable_type" => {
                     for t in child.children(&mut child.walk()) {
@@ -503,14 +604,34 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
     let input_file = &class.file_path;
     let file_stem = input_file.file_stem()?;
     
-    // Use the specified output path instead of the input file's parent directory
-    let output_dir = Path::new(output_path);
+    // Resolve output path relative to the input file's directory
+    let input_dir = input_file.parent().unwrap_or_else(|| Path::new(""));
+    let output_dir = if output_path.starts_with('/') {
+        // Absolute path
+        Path::new(output_path).to_path_buf()
+    } else {
+        // Relative path - resolve from current working directory
+        // For output paths like "test_flutter_app/aminomi/lib/gen", use it as is
+        Path::new(output_path).to_path_buf()
+    };
+    
     let output_file = match generator_type {
         "freezed" => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
         "json" => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
         "riverpod" => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
         _ => output_dir.join(format!("{}.g.dart", file_stem.to_string_lossy())),
     };
+    
+    eprintln!("[DEBUG] generate_g_dart_file_with_output_path: input_file={}, output_path={}, output_file={}", input_file.display(), output_path, output_file.display());
+    
+    // Create output directory if it doesn't exist
+    if let Err(e) = fs::create_dir_all(&output_dir) {
+        eprintln!("[DEBUG] Failed to create output directory {}: {}", output_dir.display(), e);
+        return None;
+    }
+    
+    // Update the original file's part directive
+    update_part_directive_in_file(&class.file_path, &output_file);
 
     let generated_code = match generator_type {
         "freezed" => generate_freezed_code(class),
@@ -519,6 +640,8 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
         _ => return None,
     };
 
+    eprintln!("[DEBUG] Generated code length: {} characters", generated_code.len());
+    
     Some(GenerationResult {
         input_file: input_file.clone(),
         output_file,
@@ -812,10 +935,17 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     code.push_str("// **************************************************************************\n");
     code.push_str("// RiverpodGenerator\n");
     code.push_str("// **************************************************************************\n\n");
-    // part of: filename only
-    if let Some(file_name) = class.file_path.file_name() {
-        code.push_str(&format!("part of '{}';\n\n", file_name.to_string_lossy()));
-    }
+    // Calculate relative path from output to input file
+    let output_dir = Path::new("lib/gen"); // This is where the generated file will be
+    let input_dir = class.file_path.parent().unwrap_or_else(|| Path::new(""));
+    let relative_path = if output_dir == input_dir {
+        class.file_path.file_name().unwrap().to_string_lossy().to_string()
+    } else {
+        // Calculate relative path from lib/gen to lib/providers
+        "providers/".to_string() + &class.file_path.file_name().unwrap().to_string_lossy()
+    };
+    
+    code.push_str(&format!("part of '{}';\n\n", relative_path));
     
     // Note: In Dart part files, imports should be in the main file, not in the part file
     // The main file (auth_provider.dart) should have the necessary imports
@@ -957,11 +1087,6 @@ fn generate_function_provider(function: &DartFunction) -> String {
         ));
         code.push_str(&format!("  return {}(ref);\n", function.name));
         code.push_str("});\n");
-        code.push_str(&format!("  name: r'{}',\n", provider_name));
-        code.push_str(&format!("  debugGetCreateSourceHash:\n"));
-        code.push_str(&format!("      const bool.fromEnvironment('dart.vm.product') ? null : _${}Hash,\n", provider_name));
-        code.push_str("  dependencies: null,\n");
-        code.push_str("  allTransitiveDependencies: null,\n");
     }
     
     code
@@ -1229,9 +1354,9 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                             let mut param_name = "param".to_string();
                             let mut is_named = false;
                             for param_child in param.children(&mut node.walk()) {
-                                if param_child.kind() == "type_identifier" {
-                                    param_type = param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
-                                } else if param_child.kind() == "identifier" {
+                                                        if param_child.kind() == "type_identifier" {
+                            param_type = param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").trim().to_string();
+                        } else if param_child.kind() == "identifier" {
                                     param_name = param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
                                 }
                             }
@@ -1253,9 +1378,9 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
                                     let mut param_name = "param".to_string();
                                     let mut is_named = true;
                                     for opt_param_child in opt_param.children(&mut node.walk()) {
-                                        if opt_param_child.kind() == "type_identifier" {
-                                            param_type = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").to_string();
-                                        } else if opt_param_child.kind() == "identifier" {
+                                                                if opt_param_child.kind() == "type_identifier" {
+                            param_type = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("dynamic").trim().to_string();
+                        } else if opt_param_child.kind() == "identifier" {
                                             param_name = opt_param_child.utf8_text(source.as_bytes()).unwrap_or("param").to_string();
                                         }
                                     }
