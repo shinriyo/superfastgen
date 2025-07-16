@@ -17,3 +17,6 @@ superfastgen.yaml
 Thumbs.db
 test_flutter_app/
 .dart_tool/
+
+# Debug files
+debug_ast.txt
