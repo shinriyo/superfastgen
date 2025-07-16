@@ -9,6 +9,7 @@ use log::{info, debug, error};
 use sha1::{Sha1, Digest};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use regex;
 
 // tree-sitter FFI bindings
 #[link(name = "tree-sitter-dart")]
@@ -16,42 +17,7 @@ extern "C" {
     fn tree_sitter_dart() -> *const std::ffi::c_void;
 }
 
-#[derive(Debug, Clone)]
-struct DartClass {
-    name: String,
-    annotations: Vec<String>,
-    file_path: PathBuf,
-}
-
-#[derive(Debug)]
-struct GenerationResult {
-    freezed_code: String,
-    g_dart_code: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct DartField {
-    pub name: String,
-    pub ty: String,
-    pub is_named: bool, // Added
-    pub has_default: bool, // Added for @Default annotation
-    pub default_value: Option<String>, // Added for @Default annotation value
-}
-
-#[derive(Debug, Clone)]
-pub struct DartFunction {
-    pub name: String,
-    pub return_type: String,
-    pub parameters: Vec<DartField>,
-    pub annotations: Vec<String>,
-    pub file_path: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct CaseInfo {
-    pub case_name: String,
-    pub fields: Vec<DartField>,
-}
+use super::freezed_gen::{DartClass, DartField, DartFunction, CaseInfo, GenerationResult, generate_freezed_file, generate_freezed_code, generate_json_code, extract_fields_from_dart_class, extract_union_cases_from_dart_class, get_safe_output_paths};
 
 // New functions: configurable paths
 pub fn generate_freezed_with_paths(input_path: &str, output_path: &str) {
@@ -130,24 +96,39 @@ fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator
         }
     }
 
-    // Generate code for each file
+    // Generate code for each file (only if it has at least one class with the annotation)
     for (file_path, classes) in file_classes {
-        if let Some(result) = generate_freezed_file(&file_path, &classes) {
-            // Use safe output path generation
-            let (freezed_output_path, g_dart_output_path) = get_safe_output_paths(&file_path);
-            
-            if let Err(e) = std::fs::write(&freezed_output_path, &result.freezed_code) {
-                error!("Failed to write {}: {}", freezed_output_path.display(), e);
-            } else {
-                info!("Generated: {}", freezed_output_path.display());
-            }
-            
-            if let Err(e) = std::fs::write(&g_dart_output_path, &result.g_dart_code) {
-                error!("Failed to write {}: {}", g_dart_output_path.display(), e);
-            } else {
-                info!("Generated: {}", g_dart_output_path.display());
+        // フィルタ: annotation付きクラスのみ（完全一致）
+        let filtered_classes: Vec<DartClass> = classes
+            .into_iter()
+            .filter(|class| class.annotations.iter().any(|ann| ann.trim() == annotation))
+            .collect();
+        if filtered_classes.is_empty() {
+            // このファイルには対象クラスがないので生成しない
+            continue;
+        }
+        
+        // Only generate .freezed.dart and .g.dart files for @freezed and @JsonSerializable
+        if annotation == "@freezed" || annotation == "@JsonSerializable" {
+            if let Some(result) = generate_freezed_file(&file_path, &filtered_classes) {
+                // Use safe output path generation
+                let (freezed_output_path, g_dart_output_path) = get_safe_output_paths(&file_path);
+                
+                if let Err(e) = std::fs::write(&freezed_output_path, &result.freezed_code) {
+                    error!("Failed to write {}: {}", freezed_output_path.display(), e);
+                } else {
+                    info!("Generated: {}", freezed_output_path.display());
+                }
+                
+                if let Err(e) = std::fs::write(&g_dart_output_path, &result.g_dart_code) {
+                    error!("Failed to write {}: {}", g_dart_output_path.display(), e);
+                } else {
+                    info!("Generated: {}", g_dart_output_path.display());
+                }
             }
         }
+        // For @riverpod, we don't generate .freezed.dart or .g.dart files
+        // Riverpod has its own code generation mechanism
     }
 }
 
@@ -184,55 +165,6 @@ fn generate_freezed_by_file(annotation: &str, input_path: &str, output_path: &st
             }
         }
     }
-}
-
-fn generate_freezed_file(file_path: &Path, classes: &[DartClass]) -> Option<GenerationResult> {
-    eprintln!("[DEBUG] generate_freezed_file called for {}", file_path.display());
-    
-    if classes.is_empty() {
-        eprintln!("[DEBUG] No classes found in {}", file_path.display());
-        return None;
-    }
-
-    // Generate both .freezed.dart and .g.dart files
-    let mut all_generated_code = String::new();
-    let file_stem = file_path.file_stem().unwrap().to_string_lossy();
-    
-    // Generate .freezed.dart content
-    all_generated_code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
-    all_generated_code.push_str("// **************************************************************************\n");
-    all_generated_code.push_str("// FreezedGenerator\n");
-    all_generated_code.push_str("// **************************************************************************\n\n");
-    
-    // Fix part directive to include .dart extension
-    all_generated_code.push_str(&format!("part of '{}';\n\n", format!("{}.dart", file_stem)));
-    
-    // Generate code for each class
-    for class in classes {
-        all_generated_code.push_str(&generate_freezed_code(class));
-        all_generated_code.push_str("\n");
-    }
-    
-    // Generate .g.dart content
-    let mut g_dart_code = String::new();
-    g_dart_code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
-    g_dart_code.push_str("// **************************************************************************\n");
-    g_dart_code.push_str("// JsonSerializableGenerator\n");
-    g_dart_code.push_str("// **************************************************************************\n\n");
-    
-    // Fix part directive to include .dart extension
-    g_dart_code.push_str(&format!("part of '{}';\n\n", format!("{}.dart", file_stem)));
-    
-    // Generate JSON serialization code for each class
-    for class in classes {
-        g_dart_code.push_str(&generate_json_code(class));
-        g_dart_code.push_str("\n");
-    }
-    
-    Some(GenerationResult {
-        freezed_code: all_generated_code,
-        g_dart_code,
-    })
 }
 
 fn find_flutter_project_root() -> Option<PathBuf> {
@@ -464,34 +396,47 @@ fn parse_dart_file(file_path: &Path) -> Option<Vec<DartClass>> {
 
 fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>> {
     eprintln!("[DEBUG] parse_dart_content called: {} ({} bytes)", file_path.display(), content.len());
-    let mut classes = Vec::new();
-    let lines: Vec<&str> = content.lines().collect();
-    let mut pending_annotations: Vec<String> = Vec::new();
     
-    for line in lines.iter() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('@') {
-            pending_annotations.push(trimmed.to_string());
-        } else if trimmed.starts_with("class ") || trimmed.starts_with("abstract class ") {
-            // Extract class name from "class ClassName" or "abstract class ClassName"
-            let class_name = if trimmed.starts_with("abstract class ") {
-                trimmed.split_whitespace().nth(2)
-            } else {
-                trimmed.split_whitespace().nth(1)
-            };
-            if let Some(class_name) = class_name {
-                classes.push(DartClass {
-                    name: class_name.to_string(),
-                    annotations: pending_annotations.clone(),
-                    file_path: file_path.to_path_buf(),
-                });
-            }
-            pending_annotations.clear();
-        } else if !trimmed.is_empty() && !trimmed.starts_with("//") {
-            // Any non-empty, non-comment, non-annotation, non-class line clears pending annotations
-            pending_annotations.clear();
-        }
+    let mut classes = Vec::new();
+    
+    // Use regex to find class declarations with @freezed annotations
+    let class_pattern = regex::Regex::new(r"@freezed\s*\n\s*class\s+(\w+)").unwrap();
+    let json_pattern = regex::Regex::new(r"@JsonSerializable\s*\n\s*class\s+(\w+)").unwrap();
+    let riverpod_pattern = regex::Regex::new(r"@riverpod\s*\n\s*class\s+(\w+)").unwrap();
+    
+    // Find @freezed classes
+    for cap in class_pattern.captures_iter(content) {
+        let class_name = cap[1].to_string();
+        eprintln!("[DEBUG] Found @freezed class: {}", class_name);
+        classes.push(DartClass {
+            name: class_name,
+            annotations: vec!["@freezed".to_string()],
+            file_path: file_path.to_path_buf(),
+        });
     }
+    
+    // Find @JsonSerializable classes
+    for cap in json_pattern.captures_iter(content) {
+        let class_name = cap[1].to_string();
+        eprintln!("[DEBUG] Found @JsonSerializable class: {}", class_name);
+        classes.push(DartClass {
+            name: class_name,
+            annotations: vec!["@JsonSerializable".to_string()],
+            file_path: file_path.to_path_buf(),
+        });
+    }
+    
+    // Find @riverpod classes
+    for cap in riverpod_pattern.captures_iter(content) {
+        let class_name = cap[1].to_string();
+        eprintln!("[DEBUG] Found @riverpod class: {}", class_name);
+        classes.push(DartClass {
+            name: class_name,
+            annotations: vec!["@riverpod".to_string()],
+            file_path: file_path.to_path_buf(),
+        });
+    }
+    
     Some(classes)
 }
 
@@ -726,317 +671,6 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
         freezed_code: String::new(),
         g_dart_code: generated_code,
     })
-}
-
-fn generate_freezed_code(class: &DartClass) -> String {
-    eprintln!("[DEBUG] generate_freezed_code called for {}", class.name);
-    let mut code = String::new();
-    
-    let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
-    let union_cases = extract_union_cases_from_dart_class(&source_content, &class.name);
-    let fields = extract_fields_from_dart_class(&source_content, &class.name);
-
-    if union_cases.len() > 1 {
-        // Union type (sealed class): Generate mixin first
-        code.push_str(&format!("mixin _${} {{\n", class.name));
-        code.push_str("}\n\n");
-        
-        // Generate each case as independent class
-        for case in &union_cases {
-            let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-            code.push_str(&format!("class {} with _${} implements {} {{\n", case_class_name, class.name, class.name));
-            
-            // Generate fields
-            for field in &case.fields {
-                code.push_str(&format!("  final {} {};\n", field.ty, field.name));
-            }
-            code.push_str("\n");
-            
-            // Constructor - use positional parameters to match the factory constructor
-            code.push_str(&format!("  const {}(", case_class_name));
-            let param_list = case.fields.iter().map(|f| format!("this.{}", f.name)).collect::<Vec<_>>().join(", ");
-            code.push_str(&param_list);
-            code.push_str(");\n\n");
-            
-            // toString
-            code.push_str("  @override\n  String toString() {\n    return '");
-            code.push_str(&format!("{}(", case_class_name));
-            code.push_str(&case.fields.iter().map(|f| format!("{}: ${{{}}}", f.name, f.name)).collect::<Vec<_>>().join(", "));
-            code.push_str(")';\n  }\n\n");
-            
-            // operator ==
-            code.push_str("  @override\n  bool operator ==(Object other) {\n    return identical(this, other) ||\n        other is ");
-            code.push_str(&format!("{} &&\n", case_class_name));
-            for field in &case.fields {
-                code.push_str(&format!("        {} == other.{} &&\n", field.name, field.name));
-            }
-            code.push_str("        true;\n  }\n\n");
-            
-            // hashCode
-            code.push_str("  @override\n  int get hashCode => ");
-            for (i, field) in case.fields.iter().enumerate() {
-                if i > 0 { code.push_str(" ^ "); }
-                code.push_str(&format!("{}.hashCode", field.name));
-            }
-            if case.fields.is_empty() {
-                code.push_str("0");
-            }
-            code.push_str(";\n\n");
-            
-            // toJson
-            code.push_str(&format!("  Map<String, dynamic> toJson() => _${}ToJson(this);\n", case_class_name));
-            code.push_str("}\n\n");
-        }
-    } else {
-        // Regular class - generate implementation class directly
-        code.push_str(&format!("class _{} implements {} {{\n", class.name, class.name));
-        
-        // Generate fields
-        for field in &fields {
-            code.push_str(&format!("  final {} {};\n", field.ty, field.name));
-        }
-        code.push_str("\n");
-        
-        // Constructor - use named parameters to match the factory constructor
-        code.push_str(&format!("  const _{}(", class.name));
-        code.push_str("{\n");
-        for field in fields.iter() {
-            if field.ty.ends_with('?') {
-                // Nullable fields don't need required
-                code.push_str(&format!("    this.{},\n", field.name));
-            } else if field.has_default {
-                // Fields with @Default don't need required and have default value
-                if let Some(ref default_val) = field.default_value {
-                    // 型に応じてDartリテラルを出力
-                    let dart_default = if field.ty == "String" {
-                        // すでにクォートされている場合はそのまま、なければシングルクォートで囲む
-                        let val = default_val.trim();
-                        if val.starts_with("'") && val.ends_with("'") || val.starts_with('"') && val.ends_with('"') {
-                            val.to_string()
-                        } else {
-                            format!("'{}'", val.trim_matches('"').trim_matches('\''))
-                        }
-                    } else if default_val.trim().starts_with("const ") {
-                        // constで始まる場合はそのまま出力（例：const []）
-                        default_val.trim().to_string()
-                    } else {
-                        default_val.trim().to_string()
-                    };
-                    code.push_str(&format!("    this.{} = {},\n", field.name, dart_default));
-                } else {
-                    code.push_str(&format!("    this.{},\n", field.name));
-                }
-            } else {
-                // Non-nullable fields without @Default need required
-                code.push_str(&format!("    required this.{},\n", field.name));
-            }
-        }
-        code.push_str("  });\n\n");
-        
-        // copyWith - use correct syntax
-        code.push_str(&format!("  @override\n  {} copyWith({{", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            // In copyWith, all parameters should be nullable (optional)
-            let param_type = if field.ty.ends_with('?') {
-                field.ty.clone()
-            } else {
-                format!("{}?", field.ty)
-            };
-            code.push_str(&format!("{} {}", param_type, field.name));
-        }
-        code.push_str("}) {\n");
-        code.push_str(&format!("    return _{}(", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
-        }
-        code.push_str(");\n  }\n\n");
-        
-        // toString
-        code.push_str("  @override\n  String toString() {\n    return '");
-        code.push_str(&format!("{}(", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("{}: ${{{}}}", field.name, field.name));
-        }
-        code.push_str(")';\n  }\n\n");
-        
-        // operator ==
-        code.push_str("  @override\n  bool operator ==(Object other) {\n    return identical(this, other) ||\n        other is _");
-        code.push_str(&format!("{} &&\n", class.name));
-        for field in &fields {
-            code.push_str(&format!("        {} == other.{} &&\n", field.name, field.name));
-        }
-        code.push_str("        true;\n  }\n\n");
-        
-        // hashCode
-        code.push_str("  @override\n  int get hashCode => ");
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(" ^ "); }
-            code.push_str(&format!("{}.hashCode", field.name));
-        }
-        if fields.is_empty() {
-            code.push_str("0");
-        }
-        code.push_str(";\n\n");
-        
-        // toJson
-        code.push_str(&format!("  Map<String, dynamic> toJson() => _${}ToJson(this);\n", class.name));
-        code.push_str("}\n\n");
-    }
-    
-    code
-}
-
-fn generate_copy_with(class_name: &str, fields: &[DartField]) -> String {
-    let mut code = String::new();
-    code.push_str(&format!("  {} copyWith({{\n", class_name));
-    
-    // Generate optional parameters
-    for field in fields {
-        // Remove duplicate ? from nullable types
-        let param_type = if field.ty.ends_with('?') {
-            field.ty.clone()
-        } else {
-            format!("{}?", field.ty)
-        };
-        code.push_str(&format!("    {} {},\n", param_type, field.name));
-    }
-    code.push_str("  }) {\n");
-    code.push_str(&format!("    return _{}({{", class_name));
-    
-    // Generate field assignments
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
-    }
-    code.push_str(");\n");
-    code.push_str("  }\n");
-    
-    code
-}
-
-fn generate_to_string(class_name: &str, fields: &[DartField]) -> String {
-    let mut code = String::new();
-    code.push_str("  @override\n");
-    code.push_str(&format!("  String toString() {{\n"));
-    code.push_str(&format!("    return '{}(", class_name));
-    
-    // Generate string representation of fields
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(", "); }
-        code.push_str(&format!("{}: ${}", field.name, field.name));
-    }
-    code.push_str(")';\n");
-    code.push_str("  }\n");
-    
-    code
-}
-
-fn generate_eq(class_name: &str, fields: &[DartField]) -> String {
-    let mut code = String::new();
-    code.push_str("  @override\n");
-    code.push_str("  bool operator ==(Object other) {\n");
-    code.push_str(&format!("    return identical(this, other) ||\n"));
-    code.push_str(&format!("        other is _{} &&\n", class_name));
-    
-    // Generate field comparisons
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(" &&\n"); }
-        code.push_str(&format!("        {} == other.{}", field.name, field.name));
-    }
-    code.push_str(";\n");
-    code.push_str("  }\n");
-    
-    code
-}
-
-fn generate_hash_code(fields: &[DartField]) -> String {
-    let mut code = String::new();
-    code.push_str("  @override\n");
-    code.push_str("  int get hashCode => ");
-    
-    // Generate hashCode for fields
-    for (i, field) in fields.iter().enumerate() {
-        if i > 0 { code.push_str(" ^ "); }
-        code.push_str(&format!("{}.hashCode", field.name));
-    }
-    
-    if fields.is_empty() {
-        code.push_str("0");
-    }
-    code.push_str(";\n");
-    
-    code
-}
-
-fn generate_json_code(class: &DartClass) -> String {
-    eprintln!("[DEBUG] generate_json_code called for {}", class.name);
-    let mut code = String::new();
-    
-    let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
-    let union_cases = extract_union_cases_from_dart_class(&source_content, &class.name);
-    let fields = extract_fields_from_dart_class(&source_content, &class.name);
-
-    if union_cases.len() > 1 {
-        // Union type: Generate JSON functions for each case
-        for case in &union_cases {
-            let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-            code.push_str(&format!("Map<String, dynamic> _${}ToJson({} instance) {{\n", case_class_name, case_class_name));
-            code.push_str("  return {\n");
-            code.push_str(&format!("    'runtimeType': '{}',\n", case.case_name));
-            for field in &case.fields {
-                code.push_str(&format!("    '{}': instance.{},\n", field.name, field.name));
-            }
-            code.push_str("  };\n");
-            code.push_str("}\n\n");
-            
-            code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", case_class_name, case_class_name));
-            code.push_str(&format!("  return {}(\n", case_class_name));
-            for field in &case.fields {
-                code.push_str(&format!("    json['{}'] as {},\n", field.name, field.ty));
-            }
-            code.push_str("  );\n");
-            code.push_str("}\n\n");
-        }
-        
-        // Generate the main fromJson function for the union type
-        code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class.name, class.name));
-        code.push_str("  switch (json['runtimeType'] as String) {\n");
-        for case in &union_cases {
-            let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-            code.push_str(&format!("    case '{}':\n", case.case_name));
-            code.push_str(&format!("      return _${}FromJson(json);\n", case_class_name));
-        }
-        code.push_str(&format!("    default:\n"));
-        code.push_str(&format!("      throw CheckedFromJsonException(json, '{}', '{}', 'Invalid union type');\n", class.name, class.name));
-        code.push_str("  }\n");
-        code.push_str("}\n\n");
-        
-        // Don't generate main toJson function for union types since they don't have a direct toJson method
-        // Each union case has its own toJson method
-    } else {
-        // Regular class: Generate JSON functions
-        code.push_str(&format!("Map<String, dynamic> _${}ToJson(_{} instance) {{\n", class.name, class.name));
-        code.push_str("  return {\n");
-        for field in &fields {
-            code.push_str(&format!("    '{}': instance.{},\n", field.name, field.name));
-        }
-        code.push_str("  };\n");
-        code.push_str("}\n\n");
-        
-        code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class.name, class.name));
-        code.push_str(&format!("  return _{}(", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("{}: json['{}'] as {}", field.name, field.name, field.ty));
-        }
-        code.push_str(");\n");
-        code.push_str("}\n\n");
-    }
-    
-    code
 }
 
 fn generate_riverpod_code(class: &DartClass) -> String {
@@ -1530,186 +1164,6 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
     functions
 }
 
-/// Extract Dart class field information using tree-sitter-dart
-pub fn extract_fields_from_dart_class(source_content: &str, class_name: &str) -> Vec<DartField> {
-    eprintln!("[DEBUG] extract_fields_from_dart_class called for {}", class_name);
-    let mut fields = Vec::new();
-    
-    // Find the main constructor for this class
-    let constructor_pattern = format!("const factory {}({{", class_name);
-    
-    if let Some(constructor_start) = source_content.find(&constructor_pattern) {
-        eprintln!("[DEBUG] Found constructor at position {}", constructor_start);
-        
-        // Find the closing brace of the constructor parameters
-        let mut brace_count = 0;
-        let mut in_constructor = false;
-        let mut constructor_content = String::new();
-        
-        for (i, ch) in source_content[constructor_start..].chars().enumerate() {
-            if ch == '{' {
-                brace_count += 1;
-                in_constructor = true;
-            } else if ch == '}' {
-                brace_count -= 1;
-                if in_constructor && brace_count == 0 {
-                    // Found the end of constructor parameters
-                    constructor_content = source_content[constructor_start..constructor_start + i + 1].to_string();
-                    break;
-                }
-            }
-        }
-        
-        eprintln!("[DEBUG] Constructor content: {}", constructor_content);
-        
-        // Extract parameters from the constructor content
-        if let Some(start_brace) = constructor_content.find('{') {
-            if let Some(end_brace) = constructor_content.rfind('}') {
-                let params_content = &constructor_content[start_brace + 1..end_brace];
-                eprintln!("[DEBUG] Parameters content: {}", params_content);
-                
-                // Split parameters by comma, but be careful with nested braces and comments
-                let mut params = Vec::new();
-                let mut current_param = String::new();
-                let mut brace_count = 0;
-                let mut paren_count = 0;
-                let mut in_comment = false;
-                let mut comment_type = None; // '//' or '/*'
-                
-                for ch in params_content.chars() {
-                    match ch {
-                        '{' => {
-                            if !in_comment {
-                                brace_count += 1;
-                            }
-                            current_param.push(ch);
-                        }
-                        '}' => {
-                            if !in_comment {
-                                brace_count -= 1;
-                            }
-                            current_param.push(ch);
-                        }
-                        '(' => {
-                            if !in_comment {
-                                paren_count += 1;
-                            }
-                            current_param.push(ch);
-                        }
-                        ')' => {
-                            if !in_comment {
-                                paren_count -= 1;
-                            }
-                            current_param.push(ch);
-                        }
-                        '/' => {
-                            current_param.push(ch);
-                            // Check for comment start
-                            if !in_comment {
-                                if current_param.ends_with("//") {
-                                    in_comment = true;
-                                    comment_type = Some("//");
-                                } else if current_param.ends_with("/*") {
-                                    in_comment = true;
-                                    comment_type = Some("/*");
-                                }
-                            }
-                        }
-                        '*' => {
-                            current_param.push(ch);
-                            // Check for comment end
-                            if in_comment && comment_type == Some("/*") && current_param.ends_with("*/") {
-                                in_comment = false;
-                                comment_type = None;
-                            }
-                        }
-                        '\n' => {
-                            if in_comment && comment_type == Some("//") {
-                                in_comment = false;
-                                comment_type = None;
-                            }
-                            current_param.push(ch);
-                        }
-                        ',' => {
-                            if brace_count == 0 && paren_count == 0 && !in_comment {
-                                let trimmed = current_param.trim();
-                                if !trimmed.is_empty() {
-                                    params.push(trimmed.to_string());
-                                }
-                                current_param.clear();
-                            } else {
-                                current_param.push(ch);
-                            }
-                        }
-                        _ => current_param.push(ch),
-                    }
-                }
-                
-                // Add the last parameter if it exists
-                let trimmed = current_param.trim();
-                if !trimmed.is_empty() {
-                    params.push(trimmed.to_string());
-                }
-                
-                // Post-process parameters to handle multi-line parameters
-                let mut processed_params = Vec::new();
-                for param in params {
-                    let lines: Vec<&str> = param.lines().collect();
-                    let mut processed_param = String::new();
-                    
-                    for line in lines {
-                        let trimmed_line = line.trim();
-                        // Skip comment-only lines
-                        if trimmed_line.starts_with("//") || trimmed_line.starts_with("/*") {
-                            continue;
-                        }
-                        // Skip empty lines
-                        if trimmed_line.is_empty() {
-                            continue;
-                        }
-                        // Skip standalone comment words
-                        let comment_words = ["draft", "published", "cancelled", "completed", "pending", "succeeded", "failed"];
-                        if comment_words.iter().any(|&word| trimmed_line == word) {
-                            continue;
-                        }
-                        
-                        if !processed_param.is_empty() {
-                            processed_param.push(' ');
-                        }
-                        processed_param.push_str(trimmed_line);
-                    }
-                    
-                    if !processed_param.is_empty() {
-                        processed_params.push(processed_param);
-                    }
-                }
-                
-                params = processed_params;
-                
-                eprintln!("[DEBUG] Extracted {} parameters", params.len());
-                
-                // Process each parameter
-                for param in params {
-                    eprintln!("[DEBUG] Processing parameter: {}", param);
-                    
-                    if let Some(field) = parse_dart_parameter(&param) {
-                        let field_clone = field.clone();
-                        fields.push(field);
-                        eprintln!("[DEBUG] Added field: {} {}", field_clone.ty, field_clone.name);
-                    }
-                }
-            }
-        }
-    }
-    
-    eprintln!("[DEBUG] Extracted {} fields for {}", fields.len(), class_name);
-    for field in &fields {
-        eprintln!("  {} {}", field.ty, field.name);
-    }
-    
-    fields
-}
-
 fn parse_dart_parameter(param: &str) -> Option<DartField> {
     let param = param.trim();
     
@@ -2047,156 +1501,3 @@ Future<String> testFunction(TestFunctionRef ref) async {
         assert!(file_names.contains(&"main.dart".to_string()));
     }
 } 
-
-/// Extract union cases (factory constructors) and their fields from a Dart class
-pub fn extract_union_cases_from_dart_class(source_content: &str, class_name: &str) -> Vec<CaseInfo> {
-    eprintln!("[DEBUG] extract_union_cases_from_dart_class called for {}", class_name);
-    let mut cases = Vec::new();
-    let lines: Vec<&str> = source_content.lines().collect();
-
-    let mut in_class = false;
-    let mut brace_count = 0;
-    let mut in_factory = false;
-    let mut factory_lines = Vec::new();
-    for line in lines.iter() {
-        let trimmed = line.trim();
-        // Check if we're entering the target class
-        if trimmed.starts_with(&format!("class {}", class_name)) {
-            in_class = true;
-            brace_count = 0;
-            brace_count += trimmed.chars().filter(|&c| c == '{').count();
-            brace_count -= trimmed.chars().filter(|&c| c == '}').count();
-            continue;
-        }
-        if in_class {
-            brace_count += trimmed.chars().filter(|&c| c == '{').count();
-            brace_count -= trimmed.chars().filter(|&c| c == '}').count();
-            if brace_count <= 0 {
-                break;
-            }
-            // Multi-line factory constructor support
-            if trimmed.contains("const factory") {
-                in_factory = true;
-                factory_lines.clear();
-            }
-            if in_factory {
-                factory_lines.push(trimmed);
-                if trimmed.contains(")") || trimmed.contains(";" ) {
-                    // Join all lines for this factory
-                    let factory_decl = factory_lines.join(" ");
-                    in_factory = false;
-                    // Extract case name and parameters
-                    if let Some(dot_pos) = factory_decl.find(&format!("{}.", class_name)) {
-                        let after_dot = &factory_decl[dot_pos + class_name.len() + 1..];
-                        if let Some(paren_pos) = after_dot.find('(') {
-                            let case_name = &after_dot[..paren_pos].trim();
-                            eprintln!("[DEBUG] Case name: {}", case_name);
-                            // Find matching parenthesis for parameters
-                            let mut params_content = String::new();
-                            let mut paren_level = 0;
-                            let mut found_start = false;
-                            for ch in after_dot[paren_pos..].chars() {
-                                if ch == '(' {
-                                    paren_level += 1;
-                                    found_start = true;
-                                    if paren_level == 1 { continue; }
-                                }
-                                if ch == ')' {
-                                    paren_level -= 1;
-                                    if paren_level == 0 { break; }
-                                }
-                                if found_start && paren_level >= 1 {
-                                    params_content.push(ch);
-                                }
-                            }
-                            // Parse parameters
-                            let mut case_fields = Vec::new();
-                            if !params_content.trim().is_empty() {
-                                let mut params = Vec::new();
-                                let mut current_param = String::new();
-                                let mut brace_count = 0;
-                                let mut paren_count = 0;
-                                for ch in params_content.chars() {
-                                    match ch {
-                                        '{' => { brace_count += 1; current_param.push(ch); }
-                                        '}' => { brace_count -= 1; current_param.push(ch); }
-                                        '(' => { paren_count += 1; current_param.push(ch); }
-                                        ')' => { paren_count -= 1; current_param.push(ch); }
-                                        ',' => {
-                                            if brace_count == 0 && paren_count == 0 {
-                                                if !current_param.trim().is_empty() {
-                                                    params.push(current_param.trim().to_string());
-                                                }
-                                                current_param.clear();
-                                            } else {
-                                                current_param.push(ch);
-                                            }
-                                        }
-                                        _ => current_param.push(ch),
-                                    }
-                                }
-                                if !current_param.trim().is_empty() {
-                                    params.push(current_param.trim().to_string());
-                                }
-                                for param in params {
-                                    let param_trimmed = param.trim();
-                                    if param_trimmed.is_empty() || param_trimmed.starts_with("//") {
-                                        continue;
-                                    }
-                                    eprintln!("[DEBUG] Processing union case parameter: {}", param_trimmed);
-                                    if let Some(field) = parse_dart_parameter(param_trimmed) {
-                                        if !case_fields.iter().any(|f: &DartField| f.name == field.name) {
-                                            let field_clone = field.clone();
-                                            case_fields.push(field);
-                                            eprintln!("[DEBUG] Added union case field: {} {}", field_clone.ty, field_clone.name);
-                                        }
-                                    }
-                                }
-                            }
-                            cases.push(CaseInfo {
-                                case_name: case_name.to_string(),
-                                fields: case_fields,
-                            });
-                        } else {
-                            // Case without parameters
-                            cases.push(CaseInfo {
-                                case_name: after_dot.trim().to_string(),
-                                fields: Vec::new(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    eprintln!("[DEBUG] union cases for {}:", class_name);
-    for case in &cases {
-        eprintln!("  case: {}", case.case_name);
-        for field in &case.fields {
-            eprintln!("    field: {} {}", field.ty, field.name);
-        }
-    }
-    cases
-} 
-
-// Helper function to safely generate output file names
-fn get_safe_output_paths(file_path: &Path) -> (PathBuf, PathBuf) {
-    let file_stem = file_path.file_stem().unwrap().to_string_lossy();
-    
-    // Ensure we don't have .freezed or .g in the stem already
-    let base_name = if file_stem.ends_with(".freezed") {
-        &file_stem[..file_stem.len() - 8] // Remove ".freezed"
-    } else if file_stem.ends_with(".g") {
-        &file_stem[..file_stem.len() - 2] // Remove ".g"
-    } else {
-        &file_stem
-    };
-    
-    let mut freezed_output_path = file_path.parent().unwrap().to_path_buf();
-    freezed_output_path.push(format!("{}.freezed.dart", base_name));
-    
-    let mut g_dart_output_path = file_path.parent().unwrap().to_path_buf();
-    g_dart_output_path.push(format!("{}.g.dart", base_name));
-    
-    (freezed_output_path, g_dart_output_path)
-}
