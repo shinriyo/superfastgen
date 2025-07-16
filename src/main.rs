@@ -115,18 +115,12 @@ fn main() {
             let effective_delete_conflicting = *delete_conflicting_outputs || effective.delete_conflicting_outputs;
 
             match r#type {
-                GenType::Freezed => {
-                    println!("Freezed generation is disabled. Use 'dart run build_runner build' instead.");
-                    println!("This tool is specialized for Riverpod generation.");
-                },
-                GenType::Json => {
-                    println!("JSON generation is disabled. Use 'dart run build_runner build' instead.");
-                    println!("This tool is specialized for Riverpod generation.");
-                },
+                GenType::Freezed => generate::generate_freezed_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
+                GenType::Json => generate::generate_json_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
                 GenType::Riverpod => generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
                 GenType::All => {
-                    println!("Freezed and JSON generation are disabled. Use 'dart run build_runner build' instead.");
-                    println!("This tool is specialized for Riverpod generation.");
+                    generate::generate_freezed_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
+                    generate::generate_json_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
                     generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
                 },
             }
@@ -218,8 +212,15 @@ fn run_generators(cfg: &EffectiveConfig) {
         (yaml::GenerateConfig::default(), yaml::AssetsConfig::default())
     };
     
-    // This tool is specialized for Riverpod generation
-    // Freezed and JSON generation should use 'dart run build_runner build'
+    // Generate code based on configuration
+    if yaml_gen.freezed.unwrap_or(true) {
+        generate::generate_freezed_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+    }
+    
+    if yaml_gen.json.unwrap_or(true) {
+        generate::generate_json_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+    }
+    
     if yaml_gen.riverpod.unwrap_or(true) {
         generate::generate_riverpod_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
     }
