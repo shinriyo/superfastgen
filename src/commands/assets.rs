@@ -232,8 +232,8 @@ fn asset_file_to_constant_name(asset_file: &str) -> String {
         }
     }
     
-    // Remove special characters
-    constant_name = constant_name.replace(['.', '-', '_'], "");
+    // Replace special characters with underscores instead of removing them
+    constant_name = constant_name.replace(['.', '-'], "_");
     
     constant_name
 }
