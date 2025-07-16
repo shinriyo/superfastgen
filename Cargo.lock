@@ -1046,6 +1046,7 @@ dependencies = [
  "log",
  "notify",
  "rayon",
+ "regex",
  "serde",
  "serde_yaml",
  "sha1",
