@@ -93,8 +93,8 @@ pub fn generate_assets_with_paths(_assets_path: &str, output_path: &str) {
     };
     
     // Collect asset files using pubspec.yaml assets configuration
-    // Use the Flutter project root directory
-    let project_root = "test_flutter_app/aminomi";
+    // Use the current directory as project root
+    let project_root = ".";
     let asset_files = collect_asset_files_from_project(&pubspec.flutter.assets, project_root);
     
     // Generate Dart class

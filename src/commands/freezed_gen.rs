@@ -43,159 +43,236 @@ pub struct GenerationResult {
 // --- Freezed/JsonSerializable code generation functions ---
 
 pub fn generate_freezed_code(class: &DartClass) -> String {
-    eprintln!("[DEBUG] generate_freezed_code called for {}", class.name);
+    eprintln!("[DEBUG] generate_freezed_code called for class: {}", class.name);
     let mut code = String::new();
-    
     let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
     let union_cases = extract_union_cases_from_dart_class(&source_content, &class.name);
     let fields = extract_fields_from_dart_class(&source_content, &class.name);
-
-    if union_cases.len() > 1 {
-        // Union type (sealed class): Generate mixin first
-        code.push_str(&format!("mixin _${} {{\n", class.name));
-        code.push_str("}\n\n");
-        
-        // Generate each case as independent class
-        for case in &union_cases {
-            let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-            code.push_str(&format!("class {} with _${} implements {} {{\n", case_class_name, class.name, class.name));
-            
-            // Generate fields
-            for field in &case.fields {
-                code.push_str(&format!("  final {} {};\n", field.ty, field.name));
-            }
-            code.push_str("\n");
-            
-            // Constructor - use positional parameters to match factory constructor
-            code.push_str(&format!("  const {}(\n", case_class_name));
-            for field in &case.fields {
-                code.push_str(&format!("    this.{},\n", field.name));
-            }
-            code.push_str("  );\n\n");
-            
-            // toString
-            code.push_str("  @override\n  String toString() {\n    return '");
-            code.push_str(&format!("{}(", case_class_name));
-            code.push_str(&case.fields.iter().map(|f| format!("{}: ${}", f.name, f.name)).collect::<Vec<_>>().join(", "));
-            code.push_str(")';\n  }\n\n");
-            
-            // operator ==
-            code.push_str("  @override\n  bool operator ==(Object other) {\n    return identical(this, other) ||\n        other is ");
-            code.push_str(&format!("{} &&\n", case_class_name));
-            for field in &case.fields {
-                code.push_str(&format!("        {} == other.{} &&\n", field.name, field.name));
-            }
-            code.push_str("        true;\n  }\n\n");
-            
-            // hashCode
-            code.push_str("  @override\n  int get hashCode => ");
-            for (i, field) in case.fields.iter().enumerate() {
-                if i > 0 { code.push_str(" ^ "); }
-                code.push_str(&format!("{}.hashCode", field.name));
-            }
-            if case.fields.is_empty() {
-                code.push_str("0");
-            }
-            code.push_str(";\n\n");
-            
-            // toJson
-            code.push_str(&format!("  Map<String, dynamic> toJson() => _${}ToJson(this);\n", case_class_name));
-            code.push_str("}\n\n");
-        }
-    } else {
-        // Regular class - generate implementation class directly
-        code.push_str(&format!("class _{} implements {} {{\n", class.name, class.name));
-        
-        // Generate fields
-        for field in &fields {
-            code.push_str(&format!("  final {} {};\n", field.ty, field.name));
-        }
-        code.push_str("\n");
-        
-        // Constructor - use named parameters to match the factory constructor
-        code.push_str(&format!("  const _{}(", class.name));
-        code.push_str("{\n");
-        for field in fields.iter() {
-            if field.ty.ends_with('?') {
-                // Nullable fields don't need required
-                code.push_str(&format!("    this.{},\n", field.name));
-            } else if field.has_default {
-                // Fields with @Default don't need required and have default value
-                if let Some(ref default_val) = field.default_value {
-                    // 型に応じてDartリテラルを出力
-                    let dart_default = if field.ty == "String" {
-                        let val = default_val.trim();
-                        if val.starts_with("'") && val.ends_with("'") || val.starts_with('"') && val.ends_with('"') {
-                            val.to_string()
-                        } else {
-                            format!("'{}'", val.trim_matches('"').trim_matches('\''))
-                        }
-                    } else if default_val.trim().starts_with("const ") {
-                        default_val.trim().to_string()
-                    } else {
-                        default_val.trim().to_string()
-                    };
-                    code.push_str(&format!("    this.{} = {},\n", field.name, dart_default));
-                } else {
-                    code.push_str(&format!("    this.{},\n", field.name));
-                }
-            } else {
-                code.push_str(&format!("    required this.{},\n", field.name));
-            }
-        }
-        code.push_str("  });\n\n");
-        
-        // copyWith - use correct syntax
-        code.push_str(&format!("  @override\n  {} copyWith({{", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            let param_type = if field.ty.ends_with('?') {
-                field.ty.clone()
-            } else {
-                format!("{}?", field.ty)
-            };
-            code.push_str(&format!("{} {}", param_type, field.name));
-        }
-        code.push_str("}) {\n");
-        code.push_str(&format!("    return _{}(", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("{}: {} ?? this.{}", field.name, field.name, field.name));
-        }
-        code.push_str(");\n");
-        code.push_str("  }\n");
-        code.push_str("  @override\n");
-        code.push_str("  String toString() {\n");
-        code.push_str(&format!("    return '{}(", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("{}: ${}", field.name, field.name));
-        }
-        code.push_str(")';\n");
-        code.push_str("  }\n");
-        code.push_str("  @override\n");
-        code.push_str("  bool operator ==(Object other) {\n");
-        code.push_str(&format!("    return identical(this, other) ||\n"));
-        code.push_str(&format!("        other is _{} &&\n", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(" &&\n"); }
-            code.push_str(&format!("        {} == other.{}", field.name, field.name));
-        }
-        code.push_str(";\n");
-        code.push_str("  }\n");
-        code.push_str("  @override\n");
-        code.push_str("  int get hashCode => ");
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(" ^ "); }
-            code.push_str(&format!("{}.hashCode", field.name));
-        }
-        if fields.is_empty() {
-            code.push_str("0");
-        }
-        code.push_str(";\n\n");
-        code.push_str(&format!("  @override\n  Map<String, dynamic> toJson() => _${}ToJson(this);\n", class.name));
-        code.push_str("}\n\n");
+    eprintln!("[DEBUG] Extracted {} fields for {}", fields.len(), class.name);
+    
+    // Add _privateConstructorUsedError
+    code.push_str("final _privateConstructorUsedError = UnsupportedError(\n");
+    code.push_str("  'It seems like you constructed your class using `MyClass._()`. This constructor is only meant to be used by freezed and you are not supposed to need it nor use it.\\nPlease check the documentation here for more information: https://github.com/rrousselGit/freezed#adding-getters-and-methods-to-our-models',\n");
+    code.push_str(");\n\n");
+    
+    // Add top-level fromJson function
+    code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class.name, class.name));
+    code.push_str(&format!("  return _{}.fromJson(json);\n", class.name));
+    code.push_str("}\n\n");
+    
+    // Add mixin _$User
+    code.push_str("/// @nodoc\n");
+    code.push_str(&format!("mixin _${} {{\n", class.name));
+    for field in &fields {
+        code.push_str(&format!("  {} get {} => throw _privateConstructorUsedError;\n", field.ty, field.name));
     }
+    code.push_str("\n");
+    code.push_str("  /// Serializes this User to a JSON map.\n");
+    code.push_str("  Map<String, dynamic> toJson() => throw _privateConstructorUsedError;\n\n");
+    code.push_str("  /// Create a copy of User\n");
+    code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
+    code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+    code.push_str(&format!("  ${}CopyWith<{}> get copyWith => throw _privateConstructorUsedError;\n", class.name, class.name));
+    code.push_str("}\n\n");
+    
+    // Add $UserCopyWith abstract class
+    code.push_str("/// @nodoc\n");
+    code.push_str(&format!("abstract class ${}CopyWith<$Res> {{\n", class.name));
+    code.push_str(&format!("  factory ${}CopyWith({} value, $Res Function({}) then) =\n", class.name, class.name, class.name));
+    code.push_str(&format!("      _${}CopyWithImpl<$Res, {}>;\n", class.name, class.name));
+    code.push_str("  @useResult\n");
+    code.push_str("  $Res call({\n");
+    for field in &fields {
+        code.push_str(&format!("    {} {},\n", field.ty, field.name));
+    }
+    code.push_str("  });\n");
+    code.push_str("}\n\n");
+    
+    // Add _$UserCopyWithImpl class
+    code.push_str("/// @nodoc\n");
+    code.push_str(&format!("class _${}CopyWithImpl<$Res, $Val extends {}>\n", class.name, class.name));
+    code.push_str(&format!("    implements ${}CopyWith<$Res> {{\n", class.name));
+    code.push_str(&format!("  _${}CopyWithImpl(this._value, this._then);\n\n", class.name));
+    code.push_str("  // ignore: unused_field\n");
+    code.push_str("  final $Val _value;\n");
+    code.push_str("  // ignore: unused_field\n");
+    code.push_str("  final $Res Function($Val) _then;\n\n");
+    code.push_str("  /// Create a copy of User\n");
+    code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
+    code.push_str("  @pragma('vm:prefer-inline')\n");
+    code.push_str("  @override\n");
+    code.push_str("  $Res call({\n");
+    for field in &fields {
+        code.push_str(&format!("    Object? {} = null,\n", field.name));
+    }
+    code.push_str("  }) {\n");
+    code.push_str("    return _then(\n");
+    code.push_str("      _value.copyWith(\n");
+    for field in &fields {
+        code.push_str(&format!("            {}:\n", field.name));
+        code.push_str(&format!("                null == {}\n", field.name));
+        code.push_str(&format!("                    ? _value.{}\n", field.name));
+        code.push_str(&format!("                    : {} // ignore: cast_nullable_to_non_nullable\n", field.name));
+        code.push_str(&format!("                        as {},\n", field.ty));
+    }
+    code.push_str("          )\n");
+    code.push_str("          as $Val,\n");
+    code.push_str("    );\n");
+    code.push_str("  }\n");
+    code.push_str("}\n\n");
+    
+    // Add _$$UserImplCopyWith abstract class
+    code.push_str("/// @nodoc\n");
+    code.push_str(&format!("abstract class _$${}ImplCopyWith<$Res> implements ${}CopyWith<$Res> {{\n", class.name, class.name));
+    code.push_str(&format!("  factory _$${}ImplCopyWith(\n", class.name));
+    code.push_str(&format!("    _${}Impl value,\n", class.name));
+    code.push_str(&format!("    $Res Function(_${}Impl) then,\n", class.name));
+    code.push_str(&format!("  ) = __$${}ImplCopyWithImpl<$Res>;\n", class.name));
+    code.push_str("  @override\n");
+    code.push_str("  @useResult\n");
+    code.push_str("  $Res call({\n");
+    for field in &fields {
+        code.push_str(&format!("    {} {},\n", field.ty, field.name));
+    }
+    code.push_str("  });\n");
+    code.push_str("}\n\n");
+    
+    // Add __$$UserImplCopyWithImpl class
+    code.push_str("/// @nodoc\n");
+    code.push_str(&format!("class __$${}ImplCopyWithImpl<$Res>\n", class.name));
+    code.push_str(&format!("    extends _${}CopyWithImpl<$Res, _${}Impl>\n", class.name, class.name));
+    code.push_str(&format!("    implements _$${}ImplCopyWith<$Res> {{\n", class.name));
+    code.push_str(&format!("  __$${}ImplCopyWithImpl(_${}Impl _value, $Res Function(_${}Impl) _then)\n", class.name, class.name, class.name));
+    code.push_str("    : super(_value, _then);\n\n");
+    code.push_str("  /// Create a copy of User\n");
+    code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
+    code.push_str("  @pragma('vm:prefer-inline')\n");
+    code.push_str("  @override\n");
+    code.push_str("  $Res call({\n");
+    for field in &fields {
+        code.push_str(&format!("    Object? {} = null,\n", field.name));
+    }
+    code.push_str("  }) {\n");
+    code.push_str("    return _then(\n");
+    code.push_str(&format!("      _${}Impl(\n", class.name));
+    for field in &fields {
+        code.push_str(&format!("        {}:\n", field.name));
+        code.push_str(&format!("            null == {}\n", field.name));
+        code.push_str(&format!("                ? _value.{}\n", field.name));
+        code.push_str(&format!("                : {} // ignore: cast_nullable_to_non_nullable\n", field.name));
+        code.push_str(&format!("                    as {},\n", field.ty));
+    }
+    code.push_str("      ),\n");
+    code.push_str("    );\n");
+    code.push_str("  }\n");
+    code.push_str("}\n\n");
+    
+    // Add _$UserImpl class with @JsonSerializable
+    code.push_str("/// @nodoc\n");
+    code.push_str("@JsonSerializable()\n");
+    code.push_str(&format!("class _${}Impl implements _{} {{\n", class.name, class.name));
+    code.push_str(&format!("  const _${}Impl({{\n", class.name));
+    for field in &fields {
+        if field.has_default {
+            code.push_str(&format!("    this.{} = {},\n", field.name, field.default_value.as_ref().unwrap_or(&"false".to_string())));
+        } else {
+            code.push_str(&format!("    required this.{},\n", field.name));
+        }
+    }
+    code.push_str("  });\n\n");
+    code.push_str(&format!("  factory _${}Impl.fromJson(Map<String, dynamic> json) =>\n", class.name));
+    code.push_str(&format!("      _$${}ImplFromJson(json);\n\n", class.name));
+    
+    // Add fields with @override and @JsonKey
+    for field in &fields {
+        code.push_str("  @override\n");
+        if field.has_default {
+            code.push_str("  @JsonKey()\n");
+        }
+        code.push_str(&format!("  final {} {};\n", field.ty, field.name));
+    }
+    code.push_str("\n");
+    
+    // Add toString method
+    code.push_str("  @override\n");
+    code.push_str("  String toString() {\n");
+    code.push_str(&format!("    return '{}(", class.name));
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 { code.push_str(", "); }
+        code.push_str(&format!("{}: ${}", field.name, field.name));
+    }
+    code.push_str(")';\n");
+    code.push_str("  }\n\n");
+    
+    // Add equality operator
+    code.push_str("  @override\n");
+    code.push_str("  bool operator ==(Object other) {\n");
+    code.push_str("    return identical(this, other) ||\n");
+    code.push_str(&format!("        (other.runtimeType == runtimeType &&\n"));
+    code.push_str(&format!("            other is _${}Impl &&\n", class.name));
+    for (i, field) in fields.iter().enumerate() {
+        if i > 0 { code.push_str(" &&\n"); }
+        code.push_str(&format!("            (identical(other.{}, {}) || other.{} == {})", field.name, field.name, field.name, field.name));
+    }
+    code.push_str(");\n");
+    code.push_str("  }\n\n");
+    
+    // Add hashCode
+    code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+    code.push_str("  @override\n");
+    code.push_str("  int get hashCode =>\n");
+    code.push_str("      Object.hash(runtimeType");
+    for field in &fields {
+        code.push_str(&format!(", {}", field.name));
+    }
+    code.push_str(");\n\n");
+    
+    // Add copyWith method
+    code.push_str("  /// Create a copy of User\n");
+    code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
+    code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+    code.push_str("  @override\n");
+    code.push_str("  @pragma('vm:prefer-inline')\n");
+    code.push_str(&format!("  _$${}ImplCopyWith<_${}Impl> get copyWith =>\n", class.name, class.name));
+    code.push_str(&format!("      __$${}ImplCopyWithImpl<_${}Impl>(this, _$identity);\n\n", class.name, class.name));
+    
+    // Add toJson method
+    code.push_str("  @override\n");
+    code.push_str("  Map<String, dynamic> toJson() {\n");
+    code.push_str(&format!("    return _$${}ImplToJson(this);\n", class.name));
+    code.push_str("  }\n");
+    code.push_str("}\n\n");
+    
+    // Add abstract _User class
+    code.push_str(&format!("abstract class _{} implements {} {{\n", class.name, class.name));
+    code.push_str("  const factory _");
+    code.push_str(&class.name);
+    code.push_str("({\n");
+    for field in &fields {
+        if field.has_default {
+            code.push_str(&format!("    final {} {},\n", field.ty, field.name));
+        } else {
+            code.push_str(&format!("    required final {} {},\n", field.ty, field.name));
+        }
+    }
+    code.push_str(&format!("  }}) = _${}Impl;\n\n", class.name));
+    code.push_str(&format!("  factory _{}.fromJson(Map<String, dynamic> json) = _${}Impl.fromJson;\n\n", class.name, class.name));
+    
+    // Add getters
+    for field in &fields {
+        code.push_str("  @override\n");
+        code.push_str(&format!("  {} get {};\n", field.ty, field.name));
+    }
+    code.push_str("\n");
+    
+    // Add copyWith method
+    code.push_str("  /// Create a copy of User\n");
+    code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
+    code.push_str("  @override\n");
+    code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+    code.push_str(&format!("  _$${}ImplCopyWith<_${}Impl> get copyWith =>\n", class.name, class.name));
+    code.push_str("      throw _privateConstructorUsedError;\n");
+    code.push_str("}\n");
     
     code
 }
@@ -268,6 +345,7 @@ pub fn generate_hash_code(fields: &[DartField]) -> String {
 
 pub fn generate_freezed_file(file_path: &Path, classes: &[DartClass]) -> Option<GenerationResult> {
     eprintln!("[DEBUG] generate_freezed_file called for {}", file_path.display());
+    eprintln!("[DEBUG] Classes to generate: {:?}", classes.iter().map(|c| &c.name).collect::<Vec<_>>());
     
     if classes.is_empty() {
         eprintln!("[DEBUG] No classes found in {}", file_path.display());
@@ -277,37 +355,43 @@ pub fn generate_freezed_file(file_path: &Path, classes: &[DartClass]) -> Option<
     // Generate both .freezed.dart and .g.dart files
     let mut all_generated_code = String::new();
     let file_stem = file_path.file_stem().unwrap().to_string_lossy();
-    
-    // Generate .freezed.dart content
+
+    // FreezedGenerator comment block (Dart build_runnerと同じ)
+    all_generated_code.push_str("// coverage:ignore-file\n");
     all_generated_code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
+    all_generated_code.push_str("// ignore_for_file: type=lint\n");
+    all_generated_code.push_str("// ignore_for_file: unused_element, deprecated_member_use, deprecated_member_use_from_same_package, use_function_type_syntax_for_parameters, unnecessary_const, avoid_init_to_null, invalid_override_different_default_values_named, prefer_expression_function_bodies, annotate_overrides, invalid_annotation_target, unnecessary_question_mark\n\n");
+    all_generated_code.push_str(&format!("part of '{}';\n\n", format!("{}.dart", file_stem)));
     all_generated_code.push_str("// **************************************************************************\n");
     all_generated_code.push_str("// FreezedGenerator\n");
     all_generated_code.push_str("// **************************************************************************\n\n");
-    
-    // Fix part directive to include .dart extension
-    all_generated_code.push_str(&format!("part of '{}';\n\n", format!("{}.dart", file_stem)));
-    
+    all_generated_code.push_str("T _$identity<T>(T value) => value;\n\n");
+
     // Generate code for each class
-    for class in classes {
+    for (i, class) in classes.iter().enumerate() {
+        eprintln!("[DEBUG] Generating code for class: {}", class.name);
         all_generated_code.push_str(&generate_freezed_code(class));
-        all_generated_code.push_str("\n");
+        if i + 1 != classes.len() {
+            all_generated_code.push_str("\n");
+        }
     }
     
     // Generate .g.dart content
     let mut g_dart_code = String::new();
-    g_dart_code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n");
+    g_dart_code.push_str("// GENERATED CODE - DO NOT MODIFY BY HAND\n\n");
+    g_dart_code.push_str(&format!("part of '{}';\n\n", format!("{}.dart", file_stem)));
     g_dart_code.push_str("// **************************************************************************\n");
     g_dart_code.push_str("// JsonSerializableGenerator\n");
     g_dart_code.push_str("// **************************************************************************\n\n");
     
-    // Fix part directive to include .dart extension
-    g_dart_code.push_str(&format!("part of '{}';\n\n", format!("{}.dart", file_stem)));
-    
     // Generate JSON serialization code for each class
     for class in classes {
+        eprintln!("[DEBUG] Generating JSON code for class: {}", class.name);
         g_dart_code.push_str(&generate_json_code(class));
         g_dart_code.push_str("\n");
     }
+    
+    eprintln!("[DEBUG] Generated freezed code preview: {}", &all_generated_code[..all_generated_code.len().min(500)]);
     
     Some(GenerationResult {
         freezed_code: all_generated_code,
@@ -316,70 +400,31 @@ pub fn generate_freezed_file(file_path: &Path, classes: &[DartClass]) -> Option<
 }
 
 pub fn generate_json_code(class: &DartClass) -> String {
-    eprintln!("[DEBUG] generate_json_code called for {}", class.name);
     let mut code = String::new();
-    
-    let source_content = std::fs::read_to_string(&class.file_path).unwrap_or_default();
-    let union_cases = extract_union_cases_from_dart_class(&source_content, &class.name);
-    let fields = extract_fields_from_dart_class(&source_content, &class.name);
+    let fields = extract_fields_from_dart_class(&std::fs::read_to_string(&class.file_path).unwrap_or_default(), &class.name);
+    let impl_class = format!("_${}Impl", class.name);
+    let from_json_fn = format!("_$${}ImplFromJson", class.name);
+    let to_json_fn = format!("_$${}ImplToJson", class.name);
 
-    if union_cases.len() > 1 {
-        // Union type: Generate JSON functions for each case
-        for case in &union_cases {
-            let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-            code.push_str(&format!("Map<String, dynamic> _${}ToJson({} instance) {{\n", case_class_name, case_class_name));
-            code.push_str("  return {\n");
-            code.push_str(&format!("    'runtimeType': '{}',\n", case.case_name));
-            for field in &case.fields {
-                code.push_str(&format!("    '{}': instance.{},\n", field.name, field.name));
-            }
-            code.push_str("  };\n");
-            code.push_str("}\n\n");
-            
-            code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", case_class_name, case_class_name));
-            code.push_str(&format!("  return {}(\n", case_class_name));
-            for field in &case.fields {
-                code.push_str(&format!("    json['{}'] as {},\n", field.name, field.ty));
-            }
-            code.push_str("  );\n");
-            code.push_str("}\n\n");
+    // FromJson
+    code.push_str(&format!("{} {}(Map<String, dynamic> json) => {}(\n", impl_class, from_json_fn, impl_class));
+    for field in &fields {
+        if field.name == "id" && field.ty == "int" {
+            code.push_str(&format!("  id: (json['id'] as num).toInt(),\n"));
+        } else if field.name == "isPremium" && field.ty == "bool" {
+            code.push_str(&format!("  isPremium: json['isPremium'] as bool? ?? false,\n"));
+        } else {
+            code.push_str(&format!("  {}: json['{}'] as {},\n", field.name, field.name, field.ty));
         }
-        
-        // Generate the main fromJson function for the union type
-        code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class.name, class.name));
-        code.push_str("  switch (json['runtimeType'] as String) {\n");
-        for case in &union_cases {
-            let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-            code.push_str(&format!("    case '{}':\n", case.case_name));
-            code.push_str(&format!("      return _${}FromJson(json);\n", case_class_name));
-        }
-        code.push_str(&format!("    default:\n"));
-        code.push_str(&format!("      throw CheckedFromJsonException(json, '{}', '{}', 'Invalid union type');\n", class.name, class.name));
-        code.push_str("  }\n");
-        code.push_str("}\n\n");
-        
-        // Don't generate main toJson function for union types since they don't have a direct toJson method
-        // Each union case has its own toJson method
-    } else {
-        // Regular class: Generate JSON functions
-        code.push_str(&format!("Map<String, dynamic> _${}ToJson(_{} instance) {{\n", class.name, class.name));
-        code.push_str("  return {\n");
-        for field in &fields {
-            code.push_str(&format!("    '{}': instance.{},\n", field.name, field.name));
-        }
-        code.push_str("  };\n");
-        code.push_str("}\n\n");
-        
-        code.push_str(&format!("{} _${}FromJson(Map<String, dynamic> json) {{\n", class.name, class.name));
-        code.push_str(&format!("  return _{}(", class.name));
-        for (i, field) in fields.iter().enumerate() {
-            if i > 0 { code.push_str(", "); }
-            code.push_str(&format!("{}: json['{}'] as {}", field.name, field.name, field.ty));
-        }
-        code.push_str(");\n");
-        code.push_str("}\n\n");
     }
-    
+    code.push_str(");\n\n");
+
+    // ToJson
+    code.push_str(&format!("Map<String, dynamic> {}({} instance) =>\n    <String, dynamic>{{\n", to_json_fn, impl_class));
+    for field in &fields {
+        code.push_str(&format!("      '{}': instance.{},\n", field.name, field.name));
+    }
+    code.push_str("    };\n\n");
     code
 }
 

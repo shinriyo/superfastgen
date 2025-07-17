@@ -12,20 +12,26 @@ use std::time::Duration;
 use std::path::Path;
 use log::info;
 
+// Constants for default paths (compatible with Dart build_runner)
+const DEFAULT_LIB_DIR: &str = "lib";
+const DEFAULT_OUTPUT_DIR: &str = "generated";
+const DEFAULT_ASSETS_DIR: &str = "assets";
+const DEFAULT_PUBSPEC_FILE: &str = "pubspec.yaml";
+
+// Computed constants
+const DEFAULT_OUTPUT_PATH: &str = "lib/generated";
+
 #[derive(Parser, Debug, Clone)]
 #[command(name = "SuperFastGen")]
 #[command(about = "Blazing fast codegen for Dart/Flutter", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-    /// Input directory for Dart files
-    #[arg(long, default_value = "test_flutter_app/aminomi/lib")]
-    input: String,
     /// Output directory for generated files
-    #[arg(long, default_value = "test_flutter_app/aminomi/lib/gen")]
+    #[arg(long, short, default_value = DEFAULT_OUTPUT_PATH)]
     output: String,
     /// Assets directory
-    #[arg(long, default_value = "assets")]
+    #[arg(long, default_value = DEFAULT_ASSETS_DIR)]
     assets: String,
     /// Watch mode for file changes
     #[arg(long)]
@@ -33,6 +39,9 @@ struct Cli {
     /// Delete conflicting outputs before generation
     #[arg(long)]
     delete_conflicting_outputs: bool,
+    /// Build filter for specific files (like Dart build_runner)
+    #[arg(long)]
+    build_filter: Option<String>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -42,9 +51,6 @@ enum Commands {
         /// Type of code to generate
         #[arg(long, value_enum, default_value = "all")]
         r#type: GenType,
-        /// Input directory for Dart files (overrides global --input)
-        #[arg(long)]
-        input: Option<String>,
         /// Output directory for generated files (overrides global --output)
         #[arg(long)]
         output: Option<String>,
@@ -63,9 +69,6 @@ enum Commands {
     },
     /// Generate everything (code and assets)
     All {
-        /// Input directory for Dart files (overrides global --input)
-        #[arg(long)]
-        input: Option<String>,
         /// Output directory for generated files (overrides global --output)
         #[arg(long)]
         output: Option<String>,
@@ -75,9 +78,6 @@ enum Commands {
     },
     /// Clean generated files
     Clean {
-        /// Input directory to clean (overrides global --input)
-        #[arg(long)]
-        input: Option<String>,
         /// Output directory to clean (overrides global --output)
         #[arg(long)]
         output: Option<String>,
@@ -95,11 +95,11 @@ enum GenType {
 
 #[derive(Debug, Clone)]
 struct EffectiveConfig {
-    input: String,
     output: String,
     assets: String,
     watch: bool,
     delete_conflicting_outputs: bool,
+    build_filter: Option<String>,
 }
 
 fn main() {
@@ -110,21 +110,31 @@ fn main() {
     let effective = merge_config(&cli, yaml_config);
 
     match &cli.command {
-        Some(Commands::Generate { r#type, input, output, delete_conflicting_outputs }) => {
-            let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
+        Some(Commands::Generate { r#type, output, delete_conflicting_outputs }) => {
             let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
             let effective_delete_conflicting = *delete_conflicting_outputs || effective.delete_conflicting_outputs;
 
+            let input_path = if let Some(ref filter) = effective.build_filter {
+                let path = std::path::Path::new(filter);
+                if let Some(parent) = path.parent() {
+                    parent.to_string_lossy().to_string()
+                } else {
+                    DEFAULT_LIB_DIR.to_string()
+                }
+            } else {
+                DEFAULT_LIB_DIR.to_string()
+            };
+            
             match r#type {
-                GenType::Freezed => generate::generate_freezed_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
-                GenType::Json => generate::generate_json_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
-                GenType::Riverpod => generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
-                GenType::Provider => generate::generate_provider_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
+                GenType::Freezed => generate::generate_freezed_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
+                GenType::Json => generate::generate_json_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
+                GenType::Riverpod => generate::generate_riverpod_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
+                GenType::Provider => generate::generate_provider_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
                 GenType::All => {
-                    generate::generate_freezed_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
-                    generate::generate_json_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
-                    generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
-                    generate::generate_provider_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
+                    generate::generate_freezed_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
+                    generate::generate_json_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
+                    generate::generate_riverpod_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
+                    generate::generate_provider_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
                 },
             }
         }
@@ -133,27 +143,25 @@ fn main() {
             let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
             assets::generate_assets_with_paths(&effective_assets, &effective_output);
         }
-        Some(Commands::All { input, output, assets }) => {
-            let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
+        Some(Commands::All { output, assets }) => {
             let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
             let effective_assets = assets.as_ref().cloned().unwrap_or(effective.assets.clone());
             run_generators(&EffectiveConfig {
-                input: effective_input,
                 output: effective_output,
                 assets: effective_assets,
                 watch: effective.watch,
                 delete_conflicting_outputs: effective.delete_conflicting_outputs,
+                build_filter: effective.build_filter.clone(),
             });
         }
-        Some(Commands::Clean { input, output }) => {
-            let effective_input = input.as_ref().cloned().unwrap_or(effective.input.clone());
+        Some(Commands::Clean { output }) => {
             let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
             clean_generated_files(&EffectiveConfig {
-                input: effective_input,
                 output: effective_output,
                 assets: effective.assets.clone(),
                 watch: effective.watch,
                 delete_conflicting_outputs: effective.delete_conflicting_outputs,
+                build_filter: effective.build_filter.clone(),
             });
         }
         None => {
@@ -184,20 +192,16 @@ fn merge_config(cli: &Cli, yaml_config: Option<yaml::SuperfastgenConfig>) -> Eff
     
     EffectiveConfig {
         // Prioritize CLI arguments if they differ from defaults
-        input: if cli.input != "test_flutter_app/aminomi/lib" {
-            cli.input.clone()
-        } else {
-            yaml_gen.input.unwrap_or("test_flutter_app/aminomi/lib".to_string())
-        },
-        output: if cli.output != "test_flutter_app/aminomi/lib/gen" {
+        output: if cli.output != DEFAULT_OUTPUT_PATH {
             cli.output.clone()
         } else {
-            yaml_gen.output.unwrap_or("test_flutter_app/aminomi/lib/gen".to_string())
+            yaml_gen.output.unwrap_or(DEFAULT_OUTPUT_PATH.to_string())
         },
-        assets: if cli.assets != "assets" {
+        build_filter: cli.build_filter.clone(),
+        assets: if cli.assets != DEFAULT_ASSETS_DIR {
             cli.assets.clone()
         } else {
-            yaml_assets.input.unwrap_or("assets".to_string())
+            yaml_assets.input.unwrap_or(DEFAULT_ASSETS_DIR.to_string())
         },
         // Watch mode controlled only by CLI --watch flag
         watch: cli.watch,
@@ -215,21 +219,34 @@ fn run_generators(cfg: &EffectiveConfig) {
         (yaml::GenerateConfig::default(), yaml::AssetsConfig::default())
     };
     
+    // Use build_filter if specified, otherwise use default lib directory
+    let input_path = if let Some(ref filter) = cfg.build_filter {
+        // Extract directory from build_filter path
+        let path = std::path::Path::new(filter);
+        if let Some(parent) = path.parent() {
+            parent.to_string_lossy().to_string()
+        } else {
+            DEFAULT_LIB_DIR.to_string()
+        }
+    } else {
+        DEFAULT_LIB_DIR.to_string()
+    };
+    
     // Generate code based on configuration
     if yaml_gen.freezed.unwrap_or(true) {
-        generate::generate_freezed_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_freezed_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
     }
     
     if yaml_gen.json.unwrap_or(true) {
-        generate::generate_json_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_json_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
     }
     
     if yaml_gen.riverpod.unwrap_or(true) {
-        generate::generate_riverpod_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_riverpod_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
     }
     
     if yaml_gen.provider.unwrap_or(true) {
-        generate::generate_provider_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_provider_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
     }
     
     // Use configuration for assets
@@ -246,11 +263,22 @@ fn run_generators(cfg: &EffectiveConfig) {
 
 /// Watch for file changes and rerun generators
 fn watch_mode(cfg: &EffectiveConfig) {
-    println!("Watching for changes in {} and pubspec.yaml...", cfg.input);
+    let input_path = if let Some(ref filter) = cfg.build_filter {
+        let path = std::path::Path::new(filter);
+        if let Some(parent) = path.parent() {
+            parent.to_string_lossy().to_string()
+        } else {
+            DEFAULT_LIB_DIR.to_string()
+        }
+    } else {
+        DEFAULT_LIB_DIR.to_string()
+    };
+    
+    println!("Watching for changes in {} and pubspec.yaml...", input_path);
     let (tx, rx) = channel();
     let config = Config::default().with_poll_interval(Duration::from_secs(1));
     let mut watcher: RecommendedWatcher = Watcher::new(tx, config).unwrap();
-    watcher.watch(Path::new(&cfg.input), RecursiveMode::Recursive).unwrap();
+    watcher.watch(Path::new(&input_path), RecursiveMode::Recursive).unwrap();
     watcher.watch(Path::new("pubspec.yaml"), RecursiveMode::NonRecursive).unwrap();
 
     run_generators(cfg);
@@ -274,12 +302,23 @@ fn clean_generated_files(cfg: &EffectiveConfig) {
     use std::fs;
     use walkdir::WalkDir;
     
-    println!("Cleaning generated files in {}...", cfg.input);
+    let input_path = if let Some(ref filter) = cfg.build_filter {
+        let path = std::path::Path::new(filter);
+        if let Some(parent) = path.parent() {
+            parent.to_string_lossy().to_string()
+        } else {
+            DEFAULT_LIB_DIR.to_string()
+        }
+    } else {
+        DEFAULT_LIB_DIR.to_string()
+    };
+    
+    println!("Cleaning generated files in {}...", input_path);
     
     let mut cleaned_count = 0;
     
     // Walk through the input directory and find generated files
-    for entry in WalkDir::new(&cfg.input).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&input_path).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             let path = entry.path();
             if let Some(file_name) = path.file_name() {
@@ -313,11 +352,11 @@ mod tests {
     #[test]
     fn test_run_generators() {
         let cfg = EffectiveConfig {
-            input: "test_flutter_app/aminomi/lib".to_string(),
-            output: "test_flutter_app/aminomi/lib/gen".to_string(),
-            assets: "assets".to_string(),
+            output: DEFAULT_OUTPUT_PATH.to_string(),
+            assets: DEFAULT_ASSETS_DIR.to_string(),
             watch: false,
             delete_conflicting_outputs: false,
+            build_filter: None,
         };
         run_generators(&cfg);
     }

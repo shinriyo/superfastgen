@@ -802,13 +802,22 @@ fn generate_riverpod_code(class: &DartClass) -> String {
     code.push_str("// RiverpodGenerator\n");
     code.push_str("// **************************************************************************\n\n");
     // Calculate relative path from output to input file
-    let output_dir = Path::new("lib/gen"); // This is where the generated file will be
+    // Use the actual output directory from the class file path context
     let input_dir = class.file_path.parent().unwrap_or_else(|| Path::new(""));
-    let relative_path = if output_dir == input_dir {
-        class.file_path.file_name().unwrap().to_string_lossy().to_string()
+    let file_name = class.file_path.file_name().unwrap().to_string_lossy().to_string();
+    
+    // If the file is in the same directory as where we're generating, use just the filename
+    // Otherwise, calculate the relative path
+    let relative_path = if input_dir.to_string_lossy() == "lib" || input_dir.to_string_lossy().ends_with("/lib") {
+        file_name
     } else {
-        // Calculate relative path from lib/gen to lib/providers
-        "providers/".to_string() + &class.file_path.file_name().unwrap().to_string_lossy()
+        // Calculate relative path from lib/gen to the actual file location
+        let relative_dir = input_dir.strip_prefix("lib").unwrap_or(input_dir);
+        if relative_dir.to_string_lossy().is_empty() {
+            file_name
+        } else {
+            format!("{}/{}", relative_dir.to_string_lossy().trim_start_matches('/'), file_name)
+        }
     };
     
     code.push_str(&format!("part of '{}';\n\n", relative_path));
