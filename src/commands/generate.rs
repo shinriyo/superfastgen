@@ -18,6 +18,7 @@ extern "C" {
 }
 
 use super::freezed_gen::{DartClass, DartField, DartFunction, CaseInfo, GenerationResult, generate_freezed_file, generate_freezed_code, generate_json_code, extract_fields_from_dart_class, extract_union_cases_from_dart_class, get_safe_output_paths};
+use super::provider_gen::{ProviderClass, ProviderGenerationResult, generate_provider_file, get_provider_output_paths, extract_provider_annotations, ProviderType};
 
 // New functions: configurable paths
 pub fn generate_freezed_with_paths(input_path: &str, output_path: &str) {
@@ -48,6 +49,16 @@ pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
 pub fn generate_riverpod_with_paths_and_clean(input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
     info!("Generating Riverpod code from {} to {}...", input_path, output_path);
     generate_code_for_annotation_with_paths_and_clean("@riverpod", "riverpod", input_path, output_path, delete_conflicting_outputs)
+}
+
+pub fn generate_provider_with_paths(input_path: &str, output_path: &str) {
+    info!("Generating Provider code from {} to {}...", input_path, output_path);
+    generate_provider_code_with_paths_and_clean(input_path, output_path, false)
+}
+
+pub fn generate_provider_with_paths_and_clean(input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
+    info!("Generating Provider code from {} to {}...", input_path, output_path);
+    generate_provider_code_with_paths_and_clean(input_path, output_path, delete_conflicting_outputs)
 }
 
 fn generate_code_for_annotation(annotation: &str, generator_type: &str) {
@@ -130,6 +141,105 @@ fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator
         // For @riverpod, we don't generate .freezed.dart or .g.dart files
         // Riverpod has its own code generation mechanism
     }
+}
+
+fn generate_provider_code_with_paths_and_clean(input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
+    eprintln!("[DEBUG] generate_provider_code_with_paths_and_clean called: input_path={}, output_path={}, delete_conflicting_outputs={}", input_path, output_path, delete_conflicting_outputs);
+    
+    info!("Using input path: {}", input_path);
+    let dart_files = find_dart_files(input_path);
+    info!("Found {} Dart files", dart_files.len());
+
+    if delete_conflicting_outputs {
+        info!("Cleaning output directory...");
+        clean_output_directory_all_g_dart(Path::new(input_path)).unwrap_or_else(|e| {
+            error!("Failed to clean output directory: {}", e);
+        });
+    }
+
+    // Group classes by file
+    let mut file_classes: HashMap<PathBuf, Vec<DartClass>> = HashMap::new();
+    
+    for file_path in &dart_files {
+        if let Some(classes) = parse_dart_file(file_path) {
+            for class in classes {
+                file_classes.entry(file_path.clone()).or_insert_with(Vec::new).push(class);
+            }
+        }
+    }
+
+    // Generate provider code for each file (only if it has at least one class with provider annotations)
+    for (file_path, classes) in file_classes {
+        // Filter: only classes with provider annotations
+        let provider_annotations = [
+            "@riverpod", "@FutureProvider", "@StreamProvider", "@StateNotifierProvider", 
+            "@StateProvider", "@AutoDisposeProvider", "@AutoDisposeFutureProvider", 
+            "@AutoDisposeStreamProvider", "@AutoDisposeStateNotifierProvider", "@AutoDisposeStateProvider"
+        ];
+        
+        let filtered_classes: Vec<DartClass> = classes
+            .into_iter()
+            .filter(|class| {
+                class.annotations.iter().any(|ann| {
+                    provider_annotations.iter().any(|provider_ann| ann.trim() == *provider_ann)
+                })
+            })
+            .collect();
+            
+        if filtered_classes.is_empty() {
+            // No provider classes in this file, skip
+            continue;
+        }
+        
+        // Convert DartClass to ProviderClass
+        let mut provider_classes = Vec::new();
+        for class in filtered_classes {
+            if let Some(provider_class) = convert_dart_class_to_provider_class(&class) {
+                provider_classes.push(provider_class);
+            }
+        }
+        
+        if !provider_classes.is_empty() {
+            // Generate .g.dart file for providers
+            let (_, g_dart_path) = get_provider_output_paths(&file_path);
+            if let Err(e) = generate_provider_file(&provider_classes, &g_dart_path) {
+                eprintln!("Failed to write provider file: {}", e);
+            }
+        }
+    }
+}
+
+fn convert_dart_class_to_provider_class(dart_class: &DartClass) -> Option<ProviderClass> {
+    // Extract provider type from annotations
+    let provider_types = extract_provider_annotations(&dart_class.annotations);
+    let _provider_type = provider_types.first().cloned().unwrap_or(ProviderType::Provider);
+    
+    // Try to extract return type from the class name or annotations
+    let return_type = if dart_class.name.ends_with("Notifier") {
+        "String".to_string() // Default for StateNotifier
+    } else if dart_class.name.starts_with("get") {
+        // Function-based providers
+        if dart_class.name.contains("Status") {
+            "String".to_string() // Default for status providers
+        } else {
+            "String".to_string() // Default for other get functions
+        }
+    } else if dart_class.name == "authState" {
+        "AuthState".to_string() // Specific for authState
+    } else if dart_class.name == "isAuthenticated" {
+        "bool".to_string() // Specific for isAuthenticated
+    } else if dart_class.annotations.iter().any(|ann| ann.contains("Future<")) {
+        "String".to_string() // Default for Future providers
+    } else if dart_class.annotations.iter().any(|ann| ann.contains("Stream<")) {
+        "String".to_string() // Default for Stream providers
+    } else {
+        "dynamic".to_string()
+    };
+    
+    Some(ProviderClass {
+        name: dart_class.name.clone(),
+        return_type,
+    })
 }
 
 fn generate_freezed_by_file(annotation: &str, input_path: &str, output_path: &str) {
@@ -402,7 +512,8 @@ fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>>
     // Use regex to find class declarations with @freezed annotations
     let class_pattern = regex::Regex::new(r"@freezed\s*\n\s*class\s+(\w+)").unwrap();
     let json_pattern = regex::Regex::new(r"@JsonSerializable\s*\n\s*class\s+(\w+)").unwrap();
-    let riverpod_pattern = regex::Regex::new(r"@riverpod\s*\n\s*class\s+(\w+)").unwrap();
+    let riverpod_class_pattern = regex::Regex::new(r"@riverpod\s*\n\s*class\s+(\w+)").unwrap();
+    let riverpod_function_pattern = regex::Regex::new(r"@riverpod\s*\n\s*(?:Future<[^>]+>|Stream<[^>]+>|[A-Za-z_][A-Za-z0-9_]*)\s+(\w+)\s*\(").unwrap();
     
     // Find @freezed classes
     for cap in class_pattern.captures_iter(content) {
@@ -427,11 +538,22 @@ fn parse_dart_content(content: &str, file_path: &Path) -> Option<Vec<DartClass>>
     }
     
     // Find @riverpod classes
-    for cap in riverpod_pattern.captures_iter(content) {
+    for cap in riverpod_class_pattern.captures_iter(content) {
         let class_name = cap[1].to_string();
         eprintln!("[DEBUG] Found @riverpod class: {}", class_name);
         classes.push(DartClass {
             name: class_name,
+            annotations: vec!["@riverpod".to_string()],
+            file_path: file_path.to_path_buf(),
+        });
+    }
+    
+    // Find @riverpod functions
+    for cap in riverpod_function_pattern.captures_iter(content) {
+        let function_name = cap[1].to_string();
+        eprintln!("[DEBUG] Found @riverpod function: {}", function_name);
+        classes.push(DartClass {
+            name: function_name,
             annotations: vec!["@riverpod".to_string()],
             file_path: file_path.to_path_buf(),
         });

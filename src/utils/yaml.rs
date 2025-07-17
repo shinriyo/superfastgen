@@ -8,6 +8,7 @@ pub struct GenerateConfig {
     pub freezed: Option<bool>,
     pub json: Option<bool>,
     pub riverpod: Option<bool>,
+    pub provider: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -57,6 +58,7 @@ mod tests {
                 assert_eq!(generate.freezed, Some(true));
                 assert_eq!(generate.json, Some(true));
                 assert_eq!(generate.riverpod, Some(true));
+                assert_eq!(generate.provider, Some(true));
             }
             
             if let Some(assets) = cfg.assets {

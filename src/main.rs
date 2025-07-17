@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod commands;
 mod utils;
 
-use commands::{generate, assets};
+use commands::{generate, assets, provider_gen};
 use utils::{parser, yaml};
 
 use notify::{Watcher, RecursiveMode, RecommendedWatcher, Event, EventKind, Config};
@@ -89,6 +89,7 @@ enum GenType {
     Freezed,
     Json,
     Riverpod,
+    Provider,
     All,
 }
 
@@ -118,10 +119,12 @@ fn main() {
                 GenType::Freezed => generate::generate_freezed_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
                 GenType::Json => generate::generate_json_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
                 GenType::Riverpod => generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
+                GenType::Provider => generate::generate_provider_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting),
                 GenType::All => {
                     generate::generate_freezed_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
                     generate::generate_json_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
                     generate::generate_riverpod_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
+                    generate::generate_provider_with_paths_and_clean(&effective_input, &effective_output, effective_delete_conflicting);
                 },
             }
         }
@@ -225,6 +228,10 @@ fn run_generators(cfg: &EffectiveConfig) {
         generate::generate_riverpod_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
     }
     
+    if yaml_gen.provider.unwrap_or(true) {
+        generate::generate_provider_with_paths_and_clean(&cfg.input, &cfg.output, cfg.delete_conflicting_outputs);
+    }
+    
     // Use configuration for assets
     if yaml_assets.include_images.unwrap_or(true) || 
        yaml_assets.include_fonts.unwrap_or(true) || 
@@ -310,6 +317,7 @@ mod tests {
             output: "test_flutter_app/aminomi/lib/gen".to_string(),
             assets: "assets".to_string(),
             watch: false,
+            delete_conflicting_outputs: false,
         };
         run_generators(&cfg);
     }
