@@ -660,7 +660,7 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str("  @override\n");
         code.push_str("  int get hashCode => runtimeType.hashCode;\n\n");
         
-        // copyWith getter (override needed for union case implementations)
+        // copyWith getter (override needed since abstract class has copyWith getter)
         code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
         code.push_str("  @override\n");
         code.push_str(&format!("  _$${}ImplCopyWith<{}> get copyWith =>\n", case_class_name, impl_class_name));
