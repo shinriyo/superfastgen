@@ -524,58 +524,29 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
     code.push_str("  Map<String, dynamic> toJson() => throw _privateConstructorUsedError;\n");
     code.push_str("}\n\n");
     
-    // Generate copyWith abstract class
+    // Generate toJson implementation for union types
     code.push_str("/// @nodoc\n");
-    code.push_str(&format!("abstract class _${}CopyWith<$Res> {{\n", class.name));
-    code.push_str(&format!("  factory _${}CopyWith(\n", class.name));
-    code.push_str(&format!("    _${} value,\n", class.name));
-    code.push_str(&format!("    $Res Function(_${}) then,\n", class.name));
-    code.push_str(&format!("  ) = __${}CopyWithImpl<$Res>;\n", class.name));
-    code.push_str("  @useResult\n");
-    code.push_str(&format!("  $Res call({{"));
-    // Generate copyWith parameters
-    for field in fields {
-        let field_type = if field.ty.ends_with('?') {
-            field.ty.trim_end_matches('?').to_string()
+    code.push_str(&format!("extension {}Extension on {} {{\n", class.name, class.name));
+    code.push_str("  Map<String, dynamic> toJson() => when(\n");
+    for case in union_cases {
+        code.push_str(&format!("    {}: (", case.case_name));
+        if case.fields.is_empty() {
+            code.push_str(") => <String, dynamic>{\n");
+            code.push_str(&format!("      'type': '{}',\n", case.case_name));
         } else {
-            field.ty.clone()
-        };
-        code.push_str(&format!("{}? {} = null,", field_type, field.name));
+            let params: Vec<String> = case.fields.iter().map(|f| f.name.clone()).collect();
+            code.push_str(&format!("{}) => <String, dynamic>{{\n", params.join(", ")));
+            code.push_str(&format!("      'type': '{}',\n", case.case_name));
+            for field in &case.fields {
+                code.push_str(&format!("      '{}': {},\n", field.name, field.name));
+            }
+        }
+        code.push_str("    },\n");
     }
-    code.push_str("});\n");
+    code.push_str("  );\n");
     code.push_str("}\n\n");
     
-    // Generate copyWith implementation
-    code.push_str("/// @nodoc\n");
-    code.push_str(&format!("class __${}CopyWithImpl<$Res>\n", class.name));
-    code.push_str(&format!("    extends _${}CopyWith<$Res> {{\n", class.name));
-    code.push_str(&format!("  __${}CopyWithImpl(\n", class.name));
-    code.push_str(&format!("    _${} _value,\n", class.name));
-    code.push_str(&format!("    $Res Function(_${}) _then,\n", class.name));
-    code.push_str("  ) : super(_value, _then);\n\n");
-    code.push_str("  /// Create a copy of ");
-    code.push_str(&class.name);
-    code.push_str("\n");
-    code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
-    code.push_str("  @pragma('vm:prefer-inline')\n");
-    code.push_str("  @override\n");
-    code.push_str(&format!("  $Res call({{"));
-    for field in fields {
-        let default_value = if field.ty.ends_with('?') {
-            "freezed".to_string()
-        } else {
-            "null".to_string()
-        };
-        code.push_str(&format!("{}? {} = {},", field.ty, field.name, default_value));
-    }
-    code.push_str("}) {\n");
-    code.push_str(&format!("    return _then(_${}(\n", class.name));
-    for field in fields {
-        code.push_str(&format!("      {}: {} ?? _value.{},\n", field.name, field.name, field.name));
-    }
-    code.push_str("    ));\n");
-    code.push_str("  }\n");
-    code.push_str("}\n\n");
+    // Union types don't have copyWith - skip copyWith generation
     
     // Generate each union case implementation
     for case in union_cases {
@@ -583,6 +554,55 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         let impl_class_name = format!("_${}Impl", case_class_name);
         
 
+        
+
+        
+
+        
+        // Generate abstract class for this case
+        code.push_str(&format!("abstract class {} implements {} {{\n", case_class_name, class.name));
+        if case.fields.is_empty() {
+            code.push_str(&format!("  const factory {}() = {};\n\n", case_class_name, impl_class_name));
+        } else {
+            // Check if this is a named parameter case or regular parameter case
+            let is_named_params = case.fields.iter().any(|f| f.is_named);
+            if is_named_params {
+                code.push_str(&format!("  const factory {}({{\n", case_class_name));
+                for field in &case.fields {
+                    if field.has_default || field.ty.ends_with('?') {
+                        code.push_str(&format!("    this.{},\n", field.name));
+                    } else {
+                        code.push_str(&format!("    required this.{},\n", field.name));
+                    }
+                }
+                code.push_str(&format!("  }}) = {};\n\n", impl_class_name));
+            } else {
+                // Regular parameters (not named) - but we need to handle them as named parameters for consistency
+                code.push_str(&format!("  const factory {}({{\n", case_class_name));
+                for field in &case.fields {
+                    code.push_str(&format!("    required {} {},\n", field.ty, field.name));
+                }
+                code.push_str(&format!("  }}) = {};\n\n", impl_class_name));
+            }
+        }
+        
+        // Generate fields
+        for field in &case.fields {
+            code.push_str(&format!("  {} get {};\n", field.ty, field.name));
+        }
+        if !case.fields.is_empty() {
+            code.push_str("\n");
+        }
+        
+        // Add copyWith getter for union cases
+        code.push_str("  /// Create a copy of ");
+        code.push_str(&class.name);
+        code.push_str("\n");
+        code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
+        code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+        code.push_str(&format!("  _$${}ImplCopyWith<{}> get copyWith =>\n", case_class_name, impl_class_name));
+        code.push_str(&format!("      throw _privateConstructorUsedError;\n"));
+        code.push_str("}\n\n");
         
         // Generate implementation class
         code.push_str("/// @nodoc\n");
@@ -617,15 +637,6 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str(&format!("  @override\n"));
         code.push_str(&format!("  String get $type => '{}';\n\n", case.case_name));
         
-        // copyWith method
-        code.push_str("  @override\n");
-        code.push_str(&format!("  ${}CopyWith<{}> get copyWith =>\n", class.name, class.name));
-        code.push_str("      throw _privateConstructorUsedError;\n\n");
-        
-        // fromJson factory
-        code.push_str(&format!("  factory {}.fromJson(Map<String, dynamic> json) =>\n", impl_class_name));
-        code.push_str(&format!("      _${}FromJson(json);\n\n", case_class_name));
-        
         // toString method
         code.push_str("  @override\n");
         code.push_str("  String toString() {\n");
@@ -648,6 +659,11 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
         code.push_str("  @override\n");
         code.push_str("  int get hashCode => runtimeType.hashCode;\n\n");
+        
+        // copyWith override
+        code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+        code.push_str(&format!("  _$${}ImplCopyWith<{}> get copyWith =>\n", case_class_name, impl_class_name));
+        code.push_str(&format!("      __$${}ImplCopyWithImpl<{}>(this, _$identity);\n\n", case_class_name, impl_class_name));
         
         // when method implementation
         code.push_str("  @override\n");
@@ -795,64 +811,63 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str("    return orElse();\n");
         code.push_str("  }\n\n");
         
-        // toJson method
+        // toJson method for union cases
         code.push_str("  @override\n");
         code.push_str("  Map<String, dynamic> toJson() {\n");
-        code.push_str(&format!("    return _{}ImplToJson(this);\n", case_class_name));
+        code.push_str(&format!("    return <String, dynamic>{{\n"));
+        code.push_str(&format!("      'type': '{}',\n", case.case_name));
+        for field in &case.fields {
+            code.push_str(&format!("      '{}': {},\n", field.name, field.name));
+        }
+        code.push_str("    };\n");
         code.push_str("  }\n");
         code.push_str("}\n\n");
         
-        // fromJson factory
-        code.push_str(&format!("{} _{}ImplFromJson(\n", impl_class_name, case_class_name));
-        code.push_str("  Map<String, dynamic> json,\n");
-        code.push_str(&format!(") => {}(\n", impl_class_name));
-        for field in &case.fields {
-            let field_conversion = get_field_conversion(field);
-            let formatted_conversion = format_long_expression(&field_conversion);
-            code.push_str(&format!("  {}: {},\n", field.name, formatted_conversion));
-        }
-        code.push_str(");\n\n");
+        // Generate copyWith classes
+        code.push_str(&format!("/// @nodoc\n"));
+        code.push_str(&format!("abstract class _$${}ImplCopyWith<$Res> {{\n", case_class_name));
+        code.push_str(&format!("  factory _$${}ImplCopyWith({} value, $Res Function({}) then) =\n", case_class_name, impl_class_name, impl_class_name));
+        code.push_str(&format!("      __$${}ImplCopyWithImpl<$Res>;\n\n", case_class_name));
         
-        // toJson function
-        code.push_str(&format!("Map<String, dynamic> _${}ImplToJson(\n", case_class_name));
-        code.push_str(&format!("  {} instance,\n", impl_class_name));
-        code.push_str(") => <String, dynamic>{\n");
-        for field in &case.fields {
-            let field_conversion = get_to_json_field_conversion(field);
-            code.push_str(&format!("  '{}': {},\n", field.name, field_conversion));
-        }
-        code.push_str("};\n\n");
-        
-        // Generate abstract class for this case
-        code.push_str(&format!("abstract class {} implements {} {{\n", case_class_name, class.name));
         if case.fields.is_empty() {
-            code.push_str(&format!("  const factory {}() = {};\n\n", case_class_name, impl_class_name));
-            code.push_str(&format!("  factory {}.fromJson(Map<String, dynamic> json) =\n", case_class_name));
-            code.push_str(&format!("      {}.fromJson;\n", impl_class_name));
+            code.push_str("  $Res call();\n");
         } else {
-            // Check if this is a named parameter case or regular parameter case
-            let is_named_params = case.fields.iter().any(|f| f.is_named);
-            if is_named_params {
-                code.push_str(&format!("  const factory {}({{\n", case_class_name));
-                for field in &case.fields {
-                    if field.has_default || field.ty.ends_with('?') {
-                        code.push_str(&format!("    this.{},\n", field.name));
-                    } else {
-                        code.push_str(&format!("    required this.{},\n", field.name));
-                    }
-                }
-                code.push_str(&format!("  }}) = {};\n\n", impl_class_name));
-            } else {
-                // Regular parameters (not named) - but we need to handle them as named parameters for consistency
-                code.push_str(&format!("  const factory {}({{\n", case_class_name));
-                for field in &case.fields {
-                    code.push_str(&format!("    required {} {},\n", field.ty, field.name));
-                }
-                code.push_str(&format!("  }}) = {};\n\n", impl_class_name));
+            code.push_str("  $Res call({\n");
+            for field in &case.fields {
+                code.push_str(&format!("    Object? {} = freezed,\n", field.name));
             }
-            code.push_str(&format!("  factory {}.fromJson(Map<String, dynamic> json) =\n", case_class_name));
-            code.push_str(&format!("      {}.fromJson;\n", impl_class_name));
+            code.push_str("  });\n");
         }
+        code.push_str("}\n\n");
+        
+        code.push_str(&format!("/// @nodoc\n"));
+        code.push_str(&format!("class __$${}ImplCopyWithImpl<$Res> implements _$${}ImplCopyWith<$Res> {{\n", case_class_name, case_class_name));
+        code.push_str(&format!("  __$${}ImplCopyWithImpl(this._value, this._then);\n\n", case_class_name));
+        code.push_str(&format!("  final {} _value;\n", impl_class_name));
+        code.push_str(&format!("  final $Res Function({}) _then;\n\n", impl_class_name));
+        
+        code.push_str("  @pragma('vm:prefer-inline')\n");
+        code.push_str("  @override\n");
+        if case.fields.is_empty() {
+            code.push_str("  $Res call() {\n");
+            code.push_str("    // _value is used to satisfy the unused_field warning\n");
+            code.push_str("    _value;\n");
+            code.push_str(&format!("    return _then({}());\n", impl_class_name));
+        } else {
+            code.push_str("  $Res call({\n");
+            for field in &case.fields {
+                code.push_str(&format!("    Object? {} = freezed,\n", field.name));
+            }
+            code.push_str("  }) {\n");
+            code.push_str(&format!("    return _then({}(\n", impl_class_name));
+            for field in &case.fields {
+                code.push_str(&format!("      {}: {} == freezed\n", field.name, field.name));
+                code.push_str(&format!("          ? _value.{}\n", field.name));
+                code.push_str(&format!("          : {} as {},\n", field.name, field.ty));
+            }
+            code.push_str("    ));\n");
+        }
+        code.push_str("  }\n");
         code.push_str("}\n\n");
     }
 }
@@ -887,33 +902,8 @@ pub fn generate_json_code(class: &DartClass) -> String {
     let fields = extract_fields_from_dart_class(&source_content, &class.name);
     let union_cases = extract_union_cases_from_dart_class(&source_content, &class.name);
     if !union_cases.is_empty() {
-        for case in &union_cases {
-                    let case_class_name = format!("{}{}", class.name, to_pascal_case(&case.case_name));
-        let impl_class_name = format!("_$${}ImplImpl", case_class_name);
-        let from_json_fn = format!("_$${}ImplImplFromJson", case_class_name);
-        let to_json_fn = format!("_$${}ImplImplToJson", case_class_name);
-            
-            // FromJson - JsonSerializableGenerator style
-            code.push_str(&format!("{} {}(\n", impl_class_name, from_json_fn));
-            code.push_str("  Map<String, dynamic> json,\n");
-            code.push_str(&format!(") => {}(\n", impl_class_name));
-            for field in &case.fields {
-                let field_conversion = get_field_conversion(field);
-                let formatted_conversion = format_long_expression(&field_conversion);
-                code.push_str(&format!("  {}: {},\n", field.name, formatted_conversion));
-            }
-            code.push_str(");\n\n");
-            
-            // ToJson - JsonSerializableGenerator style
-            code.push_str(&format!("Map<String, dynamic> {}(\n", to_json_fn));
-            code.push_str(&format!("  {} instance,\n", impl_class_name));
-            code.push_str(") => <String, dynamic>{\n");
-            for field in &case.fields {
-                let field_conversion = get_to_json_field_conversion(field);
-                code.push_str(&format!("  '{}': {},\n", field.name, field_conversion));
-            }
-            code.push_str("};\n\n");
-        }
+        // Union types don't have individual JSON functions - they use the main class JSON methods
+        // Skip individual JSON generation for union cases
     } else {
         let impl_class = format!("_$${}ImplImpl", class.name);
         let from_json_fn = format!("_$${}ImplImplFromJson", class.name);
