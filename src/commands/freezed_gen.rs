@@ -660,8 +660,9 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str("  @override\n");
         code.push_str("  int get hashCode => runtimeType.hashCode;\n\n");
         
-        // copyWith override
+        // copyWith getter (override needed for union case implementations)
         code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
+        code.push_str("  @override\n");
         code.push_str(&format!("  _$${}ImplCopyWith<{}> get copyWith =>\n", case_class_name, impl_class_name));
         code.push_str(&format!("      __$${}ImplCopyWithImpl<{}>(this, _$identity);\n\n", case_class_name, impl_class_name));
         
@@ -902,8 +903,31 @@ pub fn generate_json_code(class: &DartClass) -> String {
     let fields = extract_fields_from_dart_class(&source_content, &class.name);
     let union_cases = extract_union_cases_from_dart_class(&source_content, &class.name);
     if !union_cases.is_empty() {
-        // Union types don't have individual JSON functions - they use the main class JSON methods
-        // Skip individual JSON generation for union cases
+        // Generate union type FromJson function
+        let from_json_fn = format!("_${}FromJson", class.name);
+        code.push_str(&format!("{} {}(\n", class.name, from_json_fn));
+        code.push_str("  Map<String, dynamic> json,\n");
+        code.push_str(") {\n");
+        code.push_str("  switch (json['type'] as String) {\n");
+        
+        for case in &union_cases {
+            code.push_str(&format!("    case '{}':\n", case.case_name));
+            if case.fields.is_empty() {
+                code.push_str(&format!("      return {}.{}();\n", class.name, case.case_name));
+            } else {
+                code.push_str(&format!("      return {}.{}(\n", class.name, case.case_name));
+                for field in &case.fields {
+                    let field_conversion = get_field_conversion(field);
+                    let formatted_conversion = format_long_expression(&field_conversion);
+                    code.push_str(&format!("        {}: {},\n", field.name, formatted_conversion));
+                }
+                code.push_str("      );\n");
+            }
+        }
+        code.push_str("    default:\n");
+        code.push_str("      throw ArgumentError('Unknown type: ' + json['type'].toString());\n");
+        code.push_str("  }\n");
+        code.push_str("}\n\n");
     } else {
         let impl_class = format!("_$${}ImplImpl", class.name);
         let from_json_fn = format!("_$${}ImplImplFromJson", class.name);
