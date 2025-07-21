@@ -165,9 +165,9 @@ fn main() {
                 GenType::All => {
                     eprintln!("[DEBUG] GenType::All - Calling all generators");
                     generate::generate_freezed_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
-                    generate::generate_json_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
-                    generate::generate_riverpod_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
-                    generate::generate_provider_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
+                    generate::generate_json_with_paths_and_clean(&input_path, &final_output_path, false);
+                    generate::generate_riverpod_with_paths_and_clean(&input_path, &final_output_path, false);
+                    generate::generate_provider_with_paths_and_clean(&input_path, &final_output_path, false);
                 },
             }
         }
@@ -265,21 +265,28 @@ fn run_generators(cfg: &EffectiveConfig) {
         DEFAULT_LIB_DIR.to_string()
     };
     
+    // Track if we've already cleaned up in this run
+    let mut has_cleaned = false;
+    
     // Generate code based on configuration
     if yaml_gen.freezed.unwrap_or(true) {
-        generate::generate_freezed_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_freezed_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs && !has_cleaned);
+        has_cleaned = true;
     }
     
     if yaml_gen.json.unwrap_or(true) {
-        generate::generate_json_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_json_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs && !has_cleaned);
+        has_cleaned = true;
     }
     
     if yaml_gen.riverpod.unwrap_or(true) {
-        generate::generate_riverpod_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_riverpod_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs && !has_cleaned);
+        has_cleaned = true;
     }
     
     if yaml_gen.provider.unwrap_or(true) {
-        generate::generate_provider_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs);
+        generate::generate_provider_with_paths_and_clean(&input_path, &cfg.output, cfg.delete_conflicting_outputs && !has_cleaned);
+        has_cleaned = true;
     }
     
     // Use configuration for assets
