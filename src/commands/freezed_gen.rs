@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 use std::fs;
-use regex;
 
 #[derive(Clone, Debug)]
 pub struct DartClass {
@@ -593,15 +592,7 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         if !case.fields.is_empty() {
             code.push_str("\n");
         }
-        
-        // Add copyWith getter for union cases
-        code.push_str("  /// Create a copy of ");
-        code.push_str(&class.name);
-        code.push_str("\n");
-        code.push_str("  /// with the given fields replaced by the non-null parameter values.\n");
-        code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
-        code.push_str(&format!("  _$${}ImplCopyWith<{}> get copyWith =>\n", case_class_name, impl_class_name));
-        code.push_str(&format!("      throw _privateConstructorUsedError;\n"));
+        // copyWith getterは抽象クラス側には出力しない
         code.push_str("}\n\n");
         
         // Generate implementation class
@@ -627,14 +618,12 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         // Fields
         if !case.fields.is_empty() {
             for field in &case.fields {
-                code.push_str(&format!("  @override\n"));
                 code.push_str(&format!("  final {} {};\n", field.ty, field.name));
             }
             code.push_str("\n");
         }
         
         // $type field
-        code.push_str(&format!("  @override\n"));
         code.push_str(&format!("  String get $type => '{}';\n\n", case.case_name));
         
         // toString method
@@ -660,11 +649,7 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str("  @override\n");
         code.push_str("  int get hashCode => runtimeType.hashCode;\n\n");
         
-        // copyWith getter (override needed since abstract class has copyWith getter)
-        code.push_str("  @JsonKey(includeFromJson: false, includeToJson: false)\n");
-        code.push_str("  @override\n");
-        code.push_str(&format!("  _$${}ImplCopyWith<{}> get copyWith =>\n", case_class_name, impl_class_name));
-        code.push_str(&format!("      __$${}ImplCopyWithImpl<{}>(this, _$identity);\n\n", case_class_name, impl_class_name));
+        // Union/sealed型のcaseにはcopyWith getterを出力しない
         
         // when method implementation
         code.push_str("  @override\n");
@@ -824,52 +809,7 @@ fn generate_union_type_code(code: &mut String, class: &DartClass, union_cases: &
         code.push_str("  }\n");
         code.push_str("}\n\n");
         
-        // Generate copyWith classes
-        code.push_str(&format!("/// @nodoc\n"));
-        code.push_str(&format!("abstract class _$${}ImplCopyWith<$Res> {{\n", case_class_name));
-        code.push_str(&format!("  factory _$${}ImplCopyWith({} value, $Res Function({}) then) =\n", case_class_name, impl_class_name, impl_class_name));
-        code.push_str(&format!("      __$${}ImplCopyWithImpl<$Res>;\n\n", case_class_name));
-        
-        if case.fields.is_empty() {
-            code.push_str("  $Res call();\n");
-        } else {
-            code.push_str("  $Res call({\n");
-            for field in &case.fields {
-                code.push_str(&format!("    Object? {} = freezed,\n", field.name));
-            }
-            code.push_str("  });\n");
-        }
-        code.push_str("}\n\n");
-        
-        code.push_str(&format!("/// @nodoc\n"));
-        code.push_str(&format!("class __$${}ImplCopyWithImpl<$Res> implements _$${}ImplCopyWith<$Res> {{\n", case_class_name, case_class_name));
-        code.push_str(&format!("  __$${}ImplCopyWithImpl(this._value, this._then);\n\n", case_class_name));
-        code.push_str(&format!("  final {} _value;\n", impl_class_name));
-        code.push_str(&format!("  final $Res Function({}) _then;\n\n", impl_class_name));
-        
-        code.push_str("  @pragma('vm:prefer-inline')\n");
-        code.push_str("  @override\n");
-        if case.fields.is_empty() {
-            code.push_str("  $Res call() {\n");
-            code.push_str("    // _value is used to satisfy the unused_field warning\n");
-            code.push_str("    _value;\n");
-            code.push_str(&format!("    return _then({}());\n", impl_class_name));
-        } else {
-            code.push_str("  $Res call({\n");
-            for field in &case.fields {
-                code.push_str(&format!("    Object? {} = freezed,\n", field.name));
-            }
-            code.push_str("  }) {\n");
-            code.push_str(&format!("    return _then({}(\n", impl_class_name));
-            for field in &case.fields {
-                code.push_str(&format!("      {}: {} == freezed\n", field.name, field.name));
-                code.push_str(&format!("          ? _value.{}\n", field.name));
-                code.push_str(&format!("          : {} as {},\n", field.name, field.ty));
-            }
-            code.push_str("    ));\n");
-        }
-        code.push_str("  }\n");
-        code.push_str("}\n\n");
+        // Union/sealed型のcaseにはcopyWithクラスを出力しない
     }
 }
 
