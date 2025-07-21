@@ -68,6 +68,14 @@ fn generate_single_provider(class: &ProviderClass) -> String {
 }
 
 pub fn generate_provider_file(provider_classes: &[ProviderClass], output_path: &Path) -> Result<(), std::io::Error> {
+    generate_enhanced_provider_file(provider_classes, &[], output_path)
+}
+
+pub fn generate_enhanced_provider_file(
+    provider_classes: &[ProviderClass], 
+    provider_functions: &[super::freezed_gen::DartFunction], 
+    output_path: &Path
+) -> Result<(), std::io::Error> {
     let mut code = String::new();
     // Extract the file stem for the part directive
     let file_stem = output_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -89,9 +97,31 @@ pub fn generate_provider_file(provider_classes: &[ProviderClass], output_path: &
         if class.name.ends_with("Notifier") {
             // Generate the base class like _$AuthNotifier
             let base_class_name = format!("_${}", class.name);
-            code.push_str(&format!("abstract class {} extends AsyncNotifier<{}> {{\n", base_class_name, class.return_type));
+            let return_type = if class.return_type == "String" {
+                // Try to extract actual return type from class name
+                if class.name.contains("Auth") {
+                    "AuthState".to_string()
+                } else if class.name.contains("Counter") {
+                    "int".to_string()
+                } else {
+                    "dynamic".to_string()
+                }
+            } else {
+                class.return_type.clone()
+            };
+            
+            // For Notifier classes, the build method should return the actual type, not Future<type>
+            let build_return_type = if class.name.contains("Counter") {
+                "int".to_string()
+            } else if class.name.contains("Auth") {
+                "AuthState".to_string()
+            } else {
+                return_type.clone()
+            };
+            
+            code.push_str(&format!("abstract class {} extends AsyncNotifier<{}> {{\n", base_class_name, return_type));
             code.push_str(&format!("  @override\n"));
-            code.push_str(&format!("  Future<{}> build();\n", class.return_type));
+            code.push_str(&format!("  Future<{}> build();\n", build_return_type));
             code.push_str("}\n\n");
         }
     }
@@ -116,11 +146,31 @@ pub fn generate_provider_file(provider_classes: &[ProviderClass], output_path: &
     code.push_str("  }\n");
     code.push_str("}\n\n");
     
-    // Generate providers for functions only (skip classes)
+    // Generate providers for classes
     for class in provider_classes {
         let provider_code = generate_single_provider(class);
         if !provider_code.is_empty() {
             code.push_str(&provider_code);
+        }
+    }
+    
+    // Generate providers for @riverpod functions
+    let mut processed_functions = std::collections::HashSet::new();
+    for function in provider_functions {
+        // Create a unique key based on function name and parameters
+        let param_signature: Vec<String> = function.parameters.iter()
+            .map(|p| format!("{}:{}", p.name, p.ty))
+            .collect();
+        let unique_key = format!("{}({})", function.name, param_signature.join(","));
+        
+        if processed_functions.insert(unique_key.clone()) {
+            eprintln!("[DEBUG] Generating provider for function: {} with signature: {}", function.name, unique_key);
+            let function_code = generate_riverpod_function_provider(function);
+            if !function_code.is_empty() {
+                code.push_str(&function_code);
+            }
+        } else {
+            eprintln!("[DEBUG] Skipping duplicate function: {}", unique_key);
         }
     }
     
@@ -154,6 +204,93 @@ pub fn get_provider_output_paths(file_path: &Path) -> (PathBuf, PathBuf) {
     let g_dart_file = parent.join(format!("{}.g.dart", &*file_stem));
     
     (provider_file, g_dart_file)
+}
+
+fn generate_riverpod_function_provider(function: &super::freezed_gen::DartFunction) -> String {
+    let mut code = String::new();
+    
+    // Determine provider type based on return type
+    let return_type = &function.return_type;
+    let provider_name = format!("{}Provider", to_lower_camel_case(&function.name));
+    
+    // Extract the actual return type (remove Future<>, Stream<>, etc.)
+    let actual_return_type = if return_type.starts_with("Stream<") {
+        return_type.strip_prefix("Stream<").unwrap_or(return_type).trim_end_matches('>').to_string()
+    } else if return_type.starts_with("Future<") {
+        return_type.strip_prefix("Future<").unwrap_or(return_type).trim_end_matches('>').to_string()
+    } else {
+        return_type.clone()
+    };
+    
+    if return_type.starts_with("Stream<") {
+        // StreamProvider
+        code.push_str(&format!(
+            "final {} = StreamProvider<{}>((ref) {{\n  return {}(ref);\n}});\n\n",
+            provider_name,
+            actual_return_type,
+            function.name
+        ));
+    } else if return_type.starts_with("Future<") {
+        // Check if function has parameters (family provider)
+        if function.parameters.len() > 1 {
+            // Family provider - first parameter is usually the ref, others are parameters
+            let param_types: Vec<String> = function.parameters[1..].iter()
+                .map(|p| p.ty.clone())
+                .collect();
+            let param_names: Vec<String> = function.parameters[1..].iter()
+                .map(|p| p.name.clone())
+                .collect();
+            
+            code.push_str(&format!(
+                "final {} = FutureProvider.family<{}, {}>((ref, {}) async {{\n  return await {}(ref, {});\n}});\n\n",
+                provider_name,
+                actual_return_type,
+                param_types.join(", "),
+                param_names.join(", "),
+                function.name,
+                param_names.join(", ")
+            ));
+        } else {
+            // Simple FutureProvider
+            code.push_str(&format!(
+                "final {} = FutureProvider<{}>((ref) async {{\n  return await {}(ref);\n}});\n\n",
+                provider_name,
+                actual_return_type,
+                function.name
+            ));
+        }
+    } else {
+        // Regular Provider
+        if function.parameters.len() > 1 {
+            // Family provider
+            let param_types: Vec<String> = function.parameters[1..].iter()
+                .map(|p| p.ty.clone())
+                .collect();
+            let param_names: Vec<String> = function.parameters[1..].iter()
+                .map(|p| p.name.clone())
+                .collect();
+            
+            code.push_str(&format!(
+                "final {} = Provider.family<{}, {}>((ref, {}) {{\n  return {}(ref, {});\n}});\n\n",
+                provider_name,
+                actual_return_type,
+                param_types.join(", "),
+                param_names.join(", "),
+                function.name,
+                param_names.join(", ")
+            ));
+        } else {
+            // Simple Provider
+            code.push_str(&format!(
+                "final {} = Provider<{}>((ref) {{\n  return {}(ref);\n}});\n\n",
+                provider_name,
+                actual_return_type,
+                function.name
+            ));
+        }
+    }
+    
+    code
 }
 
 fn to_lower_camel_case(s: &str) -> String {

@@ -18,7 +18,7 @@ extern "C" {
 }
 
 use super::freezed_gen::{DartClass, DartField, DartFunction, CaseInfo, GenerationResult, generate_freezed_file, generate_freezed_code, generate_json_code, extract_fields_from_dart_class, extract_union_cases_from_dart_class, get_safe_output_paths};
-use super::provider_gen::{ProviderClass, ProviderGenerationResult, generate_provider_file, get_provider_output_paths, extract_provider_annotations, ProviderType};
+use super::provider_gen::{ProviderClass, ProviderGenerationResult, generate_enhanced_provider_file, get_provider_output_paths, extract_provider_annotations, ProviderType};
 
 // New functions: configurable paths
 pub fn generate_freezed_with_paths(input_path: &str, output_path: &str) {
@@ -27,6 +27,7 @@ pub fn generate_freezed_with_paths(input_path: &str, output_path: &str) {
 }
 
 pub fn generate_freezed_with_paths_and_clean(input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
+    eprintln!("[DEBUG] generate_freezed_with_paths_and_clean called with input_path: {}", input_path);
     info!("Generating Freezed code from {} to {}...", input_path, output_path);
     generate_code_for_annotation_with_paths_and_clean("@freezed", "freezed", input_path, output_path, delete_conflicting_outputs)
 }
@@ -48,7 +49,7 @@ pub fn generate_riverpod_with_paths(input_path: &str, output_path: &str) {
 
 pub fn generate_riverpod_with_paths_and_clean(input_path: &str, output_path: &str, delete_conflicting_outputs: bool) {
     info!("Generating Riverpod code from {} to {}...", input_path, output_path);
-    generate_code_for_annotation_with_paths_and_clean("@riverpod", "riverpod", input_path, output_path, delete_conflicting_outputs)
+    generate_provider_code_with_paths_and_clean(input_path, output_path, delete_conflicting_outputs)
 }
 
 pub fn generate_provider_with_paths(input_path: &str, output_path: &str) {
@@ -110,9 +111,13 @@ fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator
     // Generate code for each file (only if it has at least one class with the annotation)
     for (file_path, classes) in file_classes {
         // フィルタ: annotation付きクラスのみ（完全一致）
+        // @freezedクラスは@JsonSerializableも含むとみなす
         let filtered_classes: Vec<DartClass> = classes
             .into_iter()
-            .filter(|class| class.annotations.iter().any(|ann| ann.trim() == annotation))
+            .filter(|class| {
+                class.annotations.iter().any(|ann| ann.trim() == annotation) ||
+                (annotation == "@JsonSerializable" && class.annotations.iter().any(|ann| ann.trim() == "@freezed"))
+            })
             .collect();
         if filtered_classes.is_empty() {
             // このファイルには対象クラスがないので生成しない
@@ -121,21 +126,39 @@ fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator
         
         // Only generate .freezed.dart and .g.dart files for @freezed and @JsonSerializable
         if annotation == "@freezed" || annotation == "@JsonSerializable" {
+            eprintln!("[DEBUG] Attempting to generate freezed file for: {}", file_path.display());
+            eprintln!("[DEBUG] Filtered classes count: {}", filtered_classes.len());
             if let Some(result) = generate_freezed_file(&file_path, &filtered_classes) {
-                // Use safe output path generation
+                eprintln!("[DEBUG] Successfully generated freezed file");
+                
+                // Always use the same directory as the source file
                 let (freezed_output_path, g_dart_output_path) = get_safe_output_paths(&file_path);
                 
+                eprintln!("[DEBUG] Freezed output path: {}", freezed_output_path.display());
+                eprintln!("[DEBUG] G dart output path: {}", g_dart_output_path.display());
+                
+                eprintln!("[DEBUG] Writing freezed file to: {}", freezed_output_path.display());
+                eprintln!("[DEBUG] Freezed code length: {} bytes", result.freezed_code.len());
                 if let Err(e) = std::fs::write(&freezed_output_path, &result.freezed_code) {
+                    eprintln!("[DEBUG] Failed to write freezed file: {}", e);
                     error!("Failed to write {}: {}", freezed_output_path.display(), e);
                 } else {
+                    eprintln!("[DEBUG] Successfully wrote freezed file");
                     info!("Generated: {}", freezed_output_path.display());
                 }
                 
+                // Always generate .g.dart for @freezed classes (they have JSON serialization)
+                eprintln!("[DEBUG] Writing g.dart file to: {}", g_dart_output_path.display());
+                eprintln!("[DEBUG] G dart code length: {} bytes", result.g_dart_code.len());
                 if let Err(e) = std::fs::write(&g_dart_output_path, &result.g_dart_code) {
+                    eprintln!("[DEBUG] Failed to write g.dart file: {}", e);
                     error!("Failed to write {}: {}", g_dart_output_path.display(), e);
                 } else {
+                    eprintln!("[DEBUG] Successfully wrote g.dart file");
                     info!("Generated: {}", g_dart_output_path.display());
                 }
+            } else {
+                eprintln!("[DEBUG] Failed to generate freezed file - generate_freezed_file returned None");
             }
         }
         // For @riverpod, we don't generate .freezed.dart or .g.dart files
@@ -191,20 +214,38 @@ fn generate_provider_code_with_paths_and_clean(input_path: &str, output_path: &s
             continue;
         }
         
-        // Convert DartClass to ProviderClass
+        // Convert DartClass to ProviderClass and extract functions
         let mut provider_classes = Vec::new();
+        let mut provider_functions = Vec::new();
+        
         for class in filtered_classes {
             if let Some(provider_class) = convert_dart_class_to_provider_class(&class) {
                 provider_classes.push(provider_class);
             }
         }
         
-        if !provider_classes.is_empty() {
+        // Extract @riverpod functions from the same file
+        let source_content = std::fs::read_to_string(&file_path).unwrap_or_default();
+        let functions = extract_functions_from_dart_source(&source_content, &file_path);
+        for function in functions {
+            if function.annotations.iter().any(|ann| ann.trim() == "@riverpod") {
+                provider_functions.push(function);
+            }
+        }
+        
+        eprintln!("[DEBUG] Found {} provider classes and {} provider functions", provider_classes.len(), provider_functions.len());
+        
+        if !provider_classes.is_empty() || !provider_functions.is_empty() {
             // Generate .g.dart file for providers
             let (_, g_dart_path) = get_provider_output_paths(&file_path);
-            if let Err(e) = generate_provider_file(&provider_classes, &g_dart_path) {
+            eprintln!("[DEBUG] Generating provider file to: {}", g_dart_path.display());
+            if let Err(e) = generate_enhanced_provider_file(&provider_classes, &provider_functions, &g_dart_path) {
                 eprintln!("Failed to write provider file: {}", e);
+            } else {
+                info!("Generated Riverpod code: {}", g_dart_path.display());
             }
+        } else {
+            eprintln!("[DEBUG] No providers found, skipping generation");
         }
     }
 }
@@ -784,9 +825,8 @@ fn generate_g_dart_file_with_output_path(class: &DartClass, generator_type: &str
     
     eprintln!("[DEBUG] Generated code length: {} characters", generated_code.len());
     
-    // Create output file path
-    let mut output_file = Path::new(output_path).to_path_buf();
-    output_file.push("models");
+    // Create output file path - use the same directory as the source file
+    let mut output_file = class.file_path.parent().unwrap_or_else(|| Path::new(output_path)).to_path_buf();
     output_file.push(format!("{}.g.dart", class.file_path.file_stem().unwrap().to_string_lossy()));
     
     Some(GenerationResult {
@@ -1138,9 +1178,9 @@ pub fn extract_functions_from_dart_source(source: &str, file_path: &Path) -> Vec
     write_ast_to_file(root, source, 0, &mut file);
     writeln!(file, "=== End AST ===").unwrap();
 
-    // Recursively visit all nodes to find function signatures
+    // Recursively visit all nodes to find function declarations
     fn visit_functions_recursive(node: tree_sitter::Node, source: &str, file_path: &Path, functions: &mut Vec<DartFunction>) {
-        if node.kind() == "function_signature" {
+        if node.kind() == "function_declaration" {
             // Extract function name
             let function_name = node.children(&mut node.walk()).find(|n| n.kind() == "identifier")
                 .map(|n| n.utf8_text(source.as_bytes()).unwrap_or("").to_string())
@@ -1599,8 +1639,8 @@ Future<String> testFunction(TestFunctionRef ref) async {
         assert!(!result.g_dart_code.is_empty());
         
         // Check that generated code contains expected content
-        assert!(result.generated_code.contains("part of 'test.dart'"));
-        assert!(result.generated_code.contains("// GENERATED CODE"));
+        assert!(result.g_dart_code.contains("part of 'test.dart'"));
+        assert!(result.g_dart_code.contains("// GENERATED CODE"));
     }
 
     #[test]

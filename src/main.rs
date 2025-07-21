@@ -18,8 +18,8 @@ const DEFAULT_OUTPUT_DIR: &str = "generated";
 const DEFAULT_ASSETS_DIR: &str = "assets";
 const DEFAULT_PUBSPEC_FILE: &str = "pubspec.yaml";
 
-// Computed constants
-const DEFAULT_OUTPUT_PATH: &str = "lib/generated";
+// Computed constants - Use same directory as input for generated files
+const DEFAULT_OUTPUT_PATH: &str = "lib";
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "SuperFastGen")]
@@ -51,6 +51,9 @@ enum Commands {
         /// Type of code to generate
         #[arg(long, value_enum, default_value = "all")]
         r#type: GenType,
+        /// Input directories to process (like Dart build_runner)
+        #[arg(default_value = DEFAULT_LIB_DIR)]
+        directories: Vec<String>,
         /// Output directory for generated files (overrides global --output)
         #[arg(long)]
         output: Option<String>,
@@ -110,11 +113,15 @@ fn main() {
     let effective = merge_config(&cli, yaml_config);
 
     match &cli.command {
-        Some(Commands::Generate { r#type, output, delete_conflicting_outputs }) => {
+        Some(Commands::Generate { r#type, directories, output, delete_conflicting_outputs }) => {
             let effective_output = output.as_ref().cloned().unwrap_or(effective.output.clone());
             let effective_delete_conflicting = *delete_conflicting_outputs || effective.delete_conflicting_outputs;
 
-            let input_path = if let Some(ref filter) = effective.build_filter {
+            // Use the first directory as input path, or fallback to build_filter logic
+            let input_path = if !directories.is_empty() {
+                eprintln!("[DEBUG] Using directories[0]: {}", directories[0]);
+                directories[0].clone()
+            } else if let Some(ref filter) = effective.build_filter {
                 let path = std::path::Path::new(filter);
                 if let Some(parent) = path.parent() {
                     parent.to_string_lossy().to_string()
@@ -122,19 +129,45 @@ fn main() {
                     DEFAULT_LIB_DIR.to_string()
                 }
             } else {
+                eprintln!("[DEBUG] Using DEFAULT_LIB_DIR: {}", DEFAULT_LIB_DIR);
                 DEFAULT_LIB_DIR.to_string()
             };
             
+            // If output path is the same as input path, use the same directory for generated files
+            let final_output_path = if effective_output == input_path {
+                input_path.clone()
+            } else {
+                effective_output
+            };
+            
+            eprintln!("[DEBUG] input_path: {}", input_path);
+            eprintln!("[DEBUG] final_output_path: {}", final_output_path);
+            eprintln!("[DEBUG] effective_delete_conflicting: {}", effective_delete_conflicting);
+            
+            eprintln!("[DEBUG] r#type: {:?}", r#type);
             match r#type {
-                GenType::Freezed => generate::generate_freezed_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
-                GenType::Json => generate::generate_json_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
-                GenType::Riverpod => generate::generate_riverpod_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
-                GenType::Provider => generate::generate_provider_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting),
+                GenType::Freezed => {
+                    eprintln!("[DEBUG] GenType::Freezed - Calling generate_freezed_with_paths_and_clean");
+                    generate::generate_freezed_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting)
+                },
+                GenType::Json => {
+                    eprintln!("[DEBUG] GenType::Json - Calling generate_json_with_paths_and_clean");
+                    generate::generate_json_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting)
+                },
+                GenType::Riverpod => {
+                    eprintln!("[DEBUG] GenType::Riverpod - Calling generate_riverpod_with_paths_and_clean");
+                    generate::generate_riverpod_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting)
+                },
+                GenType::Provider => {
+                    eprintln!("[DEBUG] GenType::Provider - Calling generate_provider_with_paths_and_clean");
+                    generate::generate_provider_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting)
+                },
                 GenType::All => {
-                    generate::generate_freezed_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
-                    generate::generate_json_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
-                    generate::generate_riverpod_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
-                    generate::generate_provider_with_paths_and_clean(&input_path, &effective_output, effective_delete_conflicting);
+                    eprintln!("[DEBUG] GenType::All - Calling all generators");
+                    generate::generate_freezed_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
+                    generate::generate_json_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
+                    generate::generate_riverpod_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
+                    generate::generate_provider_with_paths_and_clean(&input_path, &final_output_path, effective_delete_conflicting);
                 },
             }
         }
