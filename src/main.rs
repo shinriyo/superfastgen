@@ -254,13 +254,7 @@ fn run_generators(cfg: &EffectiveConfig) {
     
     // Use build_filter if specified, otherwise use default lib directory
     let input_path = if let Some(ref filter) = cfg.build_filter {
-        // Extract directory from build_filter path
-        let path = std::path::Path::new(filter);
-        if let Some(parent) = path.parent() {
-            parent.to_string_lossy().to_string()
-        } else {
-            DEFAULT_LIB_DIR.to_string()
-        }
+        filter.clone()
     } else {
         DEFAULT_LIB_DIR.to_string()
     };

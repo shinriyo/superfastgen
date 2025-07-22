@@ -87,7 +87,12 @@ fn generate_code_for_annotation_with_paths_and_clean(annotation: &str, generator
     eprintln!("[DEBUG] generate_code_for_annotation_with_paths_and_clean called: annotation={}, generator_type={}, input_path={}, output_path={}, delete_conflicting_outputs={}", annotation, generator_type, input_path, output_path, delete_conflicting_outputs);
     
     info!("Using input path: {}", input_path);
-    let dart_files = find_dart_files(input_path);
+    let path = Path::new(input_path);
+    let dart_files = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        find_dart_files(input_path)
+    };
     info!("Found {} Dart files", dart_files.len());
 
     if delete_conflicting_outputs {
@@ -170,7 +175,12 @@ fn generate_provider_code_with_paths_and_clean(input_path: &str, output_path: &s
     eprintln!("[DEBUG] generate_provider_code_with_paths_and_clean called: input_path={}, output_path={}, delete_conflicting_outputs={}", input_path, output_path, delete_conflicting_outputs);
     
     info!("Using input path: {}", input_path);
-    let dart_files = find_dart_files(input_path);
+    let path = Path::new(input_path);
+    let dart_files = if path.is_file() {
+        vec![path.to_path_buf()]
+    } else {
+        find_dart_files(input_path)
+    };
     info!("Found {} Dart files", dart_files.len());
 
     if delete_conflicting_outputs {
